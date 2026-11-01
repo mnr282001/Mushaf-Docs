@@ -45,6 +45,7 @@ final class Annotation {
 
 enum Notes {
     static let rulePitch: CGFloat = 28
+    static let starterHeight: CGFloat = rulePitch * 3
 
     static func layout(of data: Data?) -> BandLayout {
         guard let data, let decoded = try? JSONDecoder().decode(BandLayout.self, from: data) else { return BandLayout(manual: nil) }

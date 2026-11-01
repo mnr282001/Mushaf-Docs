@@ -7,6 +7,9 @@ struct ReaderView: View {
     @Environment(\.modelContext) private var context
     @AppStorage("mushaf.theme") private var themeRaw = MushafTheme.auto.rawValue
     @AppStorage("mushaf.lastPage") private var lastPage = 1
+    @AppStorage(NotebookSession.active) private var activeNotebookID = ""
+    @AppStorage(NotebookSession.visible) private var visibleNotebookIDs = ""
+    @AppStorage(NotebookSession.archived) private var archivedNotebookIDs = ""
     @Query(filter: #Predicate<Annotation> { $0.kind == "interlinear" }) private var writings: [Annotation]
     @State private var store = MushafStore()
     @State private var notebook: Notebook?
@@ -14,6 +17,8 @@ struct ReaderView: View {
     @State private var interlinear = ReaderView.notesAtLaunch
     @State private var chrome = false
     @State private var showSurahs = false
+    @State private var showNotebooks = ProcessInfo.processInfo.arguments.contains("-notebooks")
+    @State private var findQuery = ""
     @State private var showJuz = false
     @State private var showTokens = false
     @State private var scrubbing = false
@@ -60,8 +65,12 @@ struct ReaderView: View {
                 if chrome {
                     VStack(spacing: 0) {
                         topBar(landscape)
+                        findField
+                        if !findQueryTrimmed.isEmpty {
+                            findResults(store.search(findQuery))
+                        }
                         Spacer()
-                        scrubber
+                        if findQueryTrimmed.isEmpty { scrubber }
                     }
                     .transition(.opacity)
                 }
@@ -70,10 +79,25 @@ struct ReaderView: View {
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: interlinear)
         }
         .onChange(of: page) { _, new in
-            if !screenshotLocked { lastPage = new }
+            if !screenshotLocked {
+                lastPage = new
+                notebook?.lastOpenedPage = new
+            }
             if !scrubbing { scrub = Double(new) }
         }
-        .sheet(isPresented: $showSurahs) { surahSheet }
+        .onChange(of: archivedNotebookIDs) { _, _ in
+            guard let notebook, NotebookSession.ids(archivedNotebookIDs).contains(notebook.id) else { return }
+            self.notebook = nil
+            prepareNotes()
+        }
+        .sheet(isPresented: $showSurahs, onDismiss: { findQuery = "" }) { surahSheet }
+        .sheet(isPresented: $showNotebooks) {
+            NotebookSwitcher(activeID: notebook?.id, currentPage: page, onOpen: { openNotebook($0) }, onJump: { book, destination in
+                openNotebook(book)
+                page = min(604, max(1, destination))
+                showNotebooks = false
+            })
+        }
         .sheet(isPresented: $showJuz) { juzSheet }
         .sheet(isPresented: $showTokens) { TokenPreview() }
         .task { prepareNotes() }
@@ -97,28 +121,41 @@ struct ReaderView: View {
             if interlinear, let notebook {
                 InterlinearPage(page: item, notebook: notebook, notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id }, typeLine: Self.typeAtLaunch ? 4 : nil)
             } else {
-                MushafPageView(page: item, markedLines: marked(on: item.number), mark: markColor)
+                MushafPageView(page: item, marks: marginMarks(on: item.number))
             }
         }
         .frame(width: width, height: height)
     }
 
-    private var markColor: Color {
-        (NotebookHue.all.first { $0.name == "Teal" } ?? NotebookHue.all[0]).resolved(night: palette.isNight).tint
-    }
-
-    private func marked(on page: Int) -> Set<Int> {
-        guard let notebook else { return [] }
-        return Set(writings.filter { $0.page == page && $0.notebook?.id == notebook.id }.compactMap(\.line))
+    private func marginMarks(on page: Int) -> [PageMark] {
+        let visible = Set(NotebookSession.ids(visibleNotebookIDs))
+        var seen = Set<String>()
+        return writings.compactMap { note in
+            guard note.page == page, let line = note.line, let book = note.notebook, visible.contains(book.id) else { return nil }
+            let key = "\(book.id.uuidString)-\(line)"
+            guard seen.insert(key).inserted else { return nil }
+            let hue = NotebookSession.hue(hex: book.colorHex).resolved(night: palette.isNight)
+            return PageMark(id: key, line: line, color: hue.tint, label: "\(book.title), line \(line)")
+        }
     }
 
     private func prepareNotes() {
         if notebook == nil {
-            let book = (try? context.fetch(FetchDescriptor<Notebook>()))?.first ?? Notebook()
-            if book.modelContext == nil { context.insert(book) }
-            notebook = book
+            let archived = Set(NotebookSession.ids(archivedNotebookIDs))
+            let books = (try? context.fetch(FetchDescriptor<Notebook>(sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+            let stored = UUID(uuidString: activeNotebookID)
+            let chosen = books.first { $0.id == stored && !archived.contains($0.id) }
+                ?? books.first { !archived.contains($0.id) }
+                ?? Notebook()
+            if chosen.modelContext == nil { context.insert(chosen) }
+            notebook = chosen
+            activeNotebookID = chosen.id.uuidString
+            var visible = NotebookSession.ids(visibleNotebookIDs).filter { id in books.contains { $0.id == id } && !archived.contains(id) }
+            if !visible.contains(chosen.id) { visible.insert(chosen.id, at: 0) }
+            visibleNotebookIDs = NotebookSession.raw(Array(visible.prefix(3)))
         }
         guard let notebook else { return }
+        if ProcessInfo.processInfo.arguments.contains("-notebooks") { seedClassNotebook() }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -172,12 +209,20 @@ struct ReaderView: View {
         let name = store.page(right)?.surahName ?? ""
         let juz = store.page(right)?.juz ?? 1
         return HStack(spacing: 8) {
-            Button(name) { showSurahs = true }.frame(minHeight: 44)
+            Button { showSurahs = true } label: {
+                Text(name).lineLimit(1).truncationMode(.tail)
+            }
+            .frame(minHeight: 44)
+            .layoutPriority(-1)
             Text("·").foregroundStyle(palette.uiSecondary)
-            Button("Juz \(juz)") { showJuz = true }.font(MushafType.juz).frame(minHeight: 44)
+            Button("Juz \(juz)") { showJuz = true }.font(MushafType.juz).frame(minHeight: 44).layoutPriority(1)
             Text("·").foregroundStyle(palette.uiSecondary)
-            Text(label).font(MushafType.ui.monospacedDigit())
-            Spacer()
+            Text(label).font(MushafType.ui.monospacedDigit()).layoutPriority(1)
+            Spacer(minLength: 8)
+            Button { showNotebooks = true } label: {
+                Image(systemName: "book.closed").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Notebooks")
             Button {
                 prepareNotes()
                 interlinear.toggle()
@@ -227,31 +272,151 @@ struct ReaderView: View {
         .padding(.bottom, 12)
     }
 
-    private var surahSheet: some View {
-        NavigationStack {
-            List(store.surahs) { surah in
-                Button {
-                    page = surah.page
-                    showSurahs = false
-                } label: {
-                    HStack {
-                        Text("\(surah.id)")
-                            .font(MushafType.ui.monospacedDigit())
-                            .foregroundStyle(palette.uiSecondary)
-                            .frame(width: 32, alignment: .trailing)
-                        Text(surah.name).foregroundStyle(palette.uiInk)
-                        Spacer()
-                        Text("\(surah.page)")
-                            .font(MushafType.uiSmall.monospacedDigit())
-                            .foregroundStyle(palette.uiSecondary)
+    private var findQueryTrimmed: String {
+        findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var findField: some View {
+        TextField("Surah, page, or 2:255", text: $findQuery)
+            .font(MushafType.ui)
+            .foregroundStyle(palette.uiInk)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(palette.paper, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(palette.uiSecondary.opacity(0.45), lineWidth: 1))
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .submitLabel(.go)
+            .onSubmit {
+                if let hit = store.search(findQuery).first { open(hit.page) }
+            }
+    }
+
+    private func findResults(_ hits: [FindHit]) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if hits.isEmpty {
+                    Text("No match")
+                        .font(MushafType.ui)
+                        .foregroundStyle(palette.uiSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(hits) { hit in
+                        Button { open(hit.page) } label: { findLabel(hit) }
                     }
-                    .frame(minHeight: 44)
                 }
             }
-            .navigationTitle("Surah")
+        }
+        .frame(maxHeight: 280)
+        .background(palette.paper)
+    }
+
+    private func findLabel(_ hit: FindHit) -> some View {
+        HStack {
+            Text(hit.kind.rawValue)
+                .font(MushafType.uiSmall)
+                .foregroundStyle(palette.uiSecondary)
+                .frame(width: 52, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(hit.title).foregroundStyle(palette.uiInk)
+                if !hit.detail.isEmpty {
+                    Text(hit.detail)
+                        .font(MushafType.uiSmall)
+                        .foregroundStyle(palette.uiSecondary)
+                }
+            }
+            Spacer()
+            if hit.kind != .page {
+                Text("\(hit.page)")
+                    .font(MushafType.uiSmall.monospacedDigit())
+                    .foregroundStyle(palette.uiSecondary)
+            }
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 20)
+    }
+
+    private var surahSheet: some View {
+        let hits = store.search(findQuery)
+        return NavigationStack {
+            VStack(spacing: 0) {
+                findField
+                if !findQueryTrimmed.isEmpty && hits.isEmpty {
+                    ContentUnavailableView.search(text: findQuery)
+                } else {
+                    List {
+                        if findQueryTrimmed.isEmpty {
+                            ForEach(store.surahs) { surah in
+                                Button {
+                                    open(surah.page)
+                                } label: {
+                                    HStack {
+                                        Text("\(surah.id)")
+                                            .font(MushafType.ui.monospacedDigit())
+                                            .foregroundStyle(palette.uiSecondary)
+                                            .frame(width: 32, alignment: .trailing)
+                                        Text(surah.name).foregroundStyle(palette.uiInk)
+                                        Spacer()
+                                        Text("\(surah.page)")
+                                            .font(MushafType.uiSmall.monospacedDigit())
+                                            .foregroundStyle(palette.uiSecondary)
+                                    }
+                                    .frame(minHeight: 44)
+                                }
+                            }
+                        } else {
+                            ForEach(hits) { hit in
+                                Button { open(hit.page) } label: { findLabel(hit).padding(.horizontal, -20) }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Find")
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func open(_ destination: Int) {
+        page = destination
+        showSurahs = false
+        findQuery = ""
+    }
+
+    private func openNotebook(_ book: Notebook) {
+        notebook = book
+        activeNotebookID = book.id.uuidString
+        var visible = NotebookSession.ids(visibleNotebookIDs).filter { $0 != book.id }
+        visible.insert(book.id, at: 0)
+        visibleNotebookIDs = NotebookSession.raw(Array(visible.prefix(3)))
+        page = min(604, max(1, book.lastOpenedPage))
+        showNotebooks = false
+    }
+
+    private func seedClassNotebook() {
+        let books = (try? context.fetch(FetchDescriptor<Notebook>())) ?? []
+        let book = books.first { $0.title == "Sunday class" } ?? {
+            let made = Notebook()
+            made.title = "Sunday class"
+            made.colorHex = "#4A5A9C"
+            made.lastOpenedPage = 50
+            context.insert(made)
+            return made
+        }()
+        guard !(book.annotations ?? []).contains(where: { $0.page == 50 }) else { return }
+        let note = Annotation()
+        note.notebook = book
+        note.kind = "interlinear"
+        note.page = 50
+        note.line = 1
+        note.ayahStart = "3:1"
+        note.ayahEnd = "3:1"
+        context.insert(note)
     }
 
     private var juzSheet: some View {

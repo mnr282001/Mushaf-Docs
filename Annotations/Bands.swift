@@ -25,33 +25,54 @@ struct InterlinearPage: View {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: marginY)
                     ForEach(page.lines) { line in
-                        PageCanvas(page: page, palette: palette, line: line.number)
-                            .frame(height: pitch)
-                            .accessibilityLabel(line.spoken)
-                        NoteBand(
-                            pitch: pitch,
-                            width: textWidth,
-                            margin: geo.size.width * 0.078,
-                            ink: hue.ink,
-                            tint: hue.tint,
-                            rule: palette.rule,
-                            drawing: note(line.number)?.drawing ?? Data(),
-                            text: note(line.number)?.text ?? Data(),
-                            manual: Notes.layout(of: note(line.number)?.layout).manual,
-                            startsTyping: line.number == typeLine,
-                            onDrawing: { setDrawing($0, line: line) },
-                            onText: { setText($0, line: line) },
-                            onManual: { setManual($0, line: line) },
-                            onEdit: {
-                                if reduceMotion {
-                                    proxy.scrollTo(line.id, anchor: .center)
-                                } else {
-                                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(line.id, anchor: .center) }
+                        VStack(spacing: 0) {
+                            PageCanvas(page: page, palette: palette, line: line.number)
+                                .frame(height: pitch)
+                                .accessibilityLabel(line.spoken)
+                                .overlay(alignment: .trailing) {
+                                    if note(line.number) == nil {
+                                        addNote(line, hue: hue, margin: geo.size.width * 0.078) {
+                                            if reduceMotion {
+                                                proxy.scrollTo(line.id, anchor: .center)
+                                            } else {
+                                                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(line.id, anchor: .center) }
+                                            }
+                                        }
+                                    }
                                 }
+                            if note(line.number) != nil {
+                                NoteBand(
+                                    pitch: pitch,
+                                    width: textWidth,
+                                    margin: geo.size.width * 0.078,
+                                    ink: hue.ink,
+                                    tint: hue.tint,
+                                    wash: hue.wash,
+                                    washOpacity: hue.washOpacity,
+                                    surface: palette.desk,
+                                    paper: palette.paper,
+                                    rule: hue.tint.opacity(0.28),
+                                    drawing: note(line.number)?.drawing ?? Data(),
+                                    text: note(line.number)?.text ?? Data(),
+                                    manual: Notes.layout(of: note(line.number)?.layout).manual,
+                                    startsTyping: line.number == typeLine,
+                                    onDrawing: { setDrawing($0, line: line) },
+                                    onText: { setText($0, line: line) },
+                                    onManual: { setManual($0, line: line) },
+                                    onEdit: {
+                                        if reduceMotion {
+                                            proxy.scrollTo(line.id, anchor: .center)
+                                        } else {
+                                            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(line.id, anchor: .center) }
+                                        }
+                                    }
+                                )
+                                .padding(.top, 6)
+                                .padding(.bottom, 12)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                             }
-                        )
+                        }
                         .id(line.id)
-                        .transition(.opacity)
                     }
                     Color.clear.frame(height: marginY + keyboard)
                 }
@@ -60,6 +81,7 @@ struct InterlinearPage: View {
             .scrollIndicators(.hidden)
             .background(palette.paper)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: notes.count)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: made.count)
         }
             .background(palette.paper)
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
@@ -72,6 +94,24 @@ struct InterlinearPage: View {
 
     private func note(_ line: Int) -> Annotation? {
         made[line] ?? notes.first { $0.line == line }
+    }
+
+    private func addNote(_ line: MushafLine, hue: NotebookHue, margin: CGFloat, scroll: @escaping () -> Void) -> some View {
+        Button {
+            setManual(Notes.starterHeight, line: line)
+            scroll()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(hue.ink)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(palette.paper))
+                .overlay(Circle().strokeBorder(hue.tint, lineWidth: 1.5))
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, max(0, (margin - 44) / 2))
+        .accessibilityLabel("Add a note on line \(line.number)")
     }
 
     private func ensure(_ line: MushafLine) -> Annotation {
@@ -128,6 +168,10 @@ struct NoteBand: View {
     var margin: CGFloat
     var ink: Color
     var tint: Color
+    var wash: Color
+    var washOpacity: Double
+    var surface: Color
+    var paper: Color
     var rule: Color
     var drawing: Data
     var text: Data
@@ -177,51 +221,61 @@ struct NoteBand: View {
                 typing = false
             })
             BandText(textData: text, ink: ink.uiColor, typing: typing, onChange: onText)
-            Rectangle().fill(tint).frame(width: 1)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background { slip }
         .environment(\.layoutDirection, .rightToLeft)
-        .contentShape(Rectangle())
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture { focused = true }
+    }
+
+    private var slip: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(surface)
+            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(wash.opacity(washOpacity)) }
+            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(tint.opacity(0.55), lineWidth: 1) }
+            .overlay(alignment: .leading) { Rectangle().fill(tint).frame(width: 4) }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
 
     private var controls: some View {
         ZStack(alignment: .top) {
             VStack {
                 Spacer(minLength: 0)
-                Capsule()
-                    .fill(tint.opacity(0.7))
-                    .frame(width: 28, height: 5)
+                Image(systemName: "arrow.up.and.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(paper))
+                    .overlay(Circle().strokeBorder(tint, lineWidth: 1.5))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
                     .gesture(resize)
                     .onTapGesture(count: 2) { onManual(nil) }
                     .accessibilityLabel("Resize note")
-                    .accessibilityHint("Drag to make the band taller. Double-tap to fit the writing.")
-            }
-            VStack(spacing: 0) {
-                if focused {
-                    Button {
-                        typing.toggle()
-                        if typing { onEdit() }
-                    } label: {
-                        Image(systemName: typing ? "pencil.tip" : "keyboard")
-                            .font(MushafType.ui)
-                            .frame(width: 44, height: 44)
+                    .accessibilityHint("Drag to change the height. Double-tap to fit the writing.")
+                    .accessibilityAdjustableAction { direction in
+                        if direction == .increment {
+                            onManual(height + Notes.rulePitch)
+                        } else {
+                            onManual(max(pitch * 0.6, height - Notes.rulePitch))
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(ink)
-                    .accessibilityLabel(typing ? "Pen" : "Keyboard")
-                }
+            }
+            if focused {
                 Button {
-                    onManual(height + Notes.rulePitch)
+                    typing.toggle()
+                    if typing { onEdit() }
                 } label: {
-                    Image(systemName: "plus")
+                    Image(systemName: typing ? "pencil.tip" : "keyboard")
                         .font(MushafType.ui)
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(ink)
-                .accessibilityLabel("Add a ruled line")
+                .accessibilityLabel(typing ? "Pen" : "Keyboard")
             }
         }
     }

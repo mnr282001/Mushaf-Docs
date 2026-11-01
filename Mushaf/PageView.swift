@@ -1,33 +1,50 @@
 import SwiftUI
 import UIKit
 
+struct PageMark: Identifiable {
+    var id: String
+    var line: Int
+    var color: Color
+    var label: String
+}
+
 struct MushafPageView: View {
     var page: MushafPage
     var markedLines: Set<Int> = []
     var mark: Color = Color(hex: 0x2E7D6B)
+    var marks: [PageMark] = []
     @Environment(\.palette) private var palette
 
     var body: some View {
         PageCanvas(page: page, palette: palette)
             .background(palette.paper)
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
-            .overlay { marks }
+            .overlay { markDots }
     }
 
-    private var marks: some View {
+    private var markDots: some View {
         GeometryReader { geo in
             let marginY = geo.size.height * 0.055
             let pitch = (geo.size.height - marginY * 2) / CGFloat(max(page.lines.count, 1))
-            ForEach(page.lines.filter { markedLines.contains($0.number) }) { line in
+            let rows = Dictionary(grouping: shownMarks, by: \.line)
+            ForEach(page.lines) { line in
+                let row = rows[line.number] ?? []
                 let index = page.lines.firstIndex { $0.number == line.number } ?? 0
-                Circle()
-                    .fill(mark)
-                    .frame(width: 4, height: 4)
-                    .position(x: 14, y: marginY + (CGFloat(index) + 0.5) * pitch)
-                    .accessibilityLabel("Note on line \(line.number)")
+                ForEach(Array(row.enumerated()), id: \.element.id) { offset, item in
+                    Circle()
+                        .fill(item.color)
+                        .frame(width: 4, height: 4)
+                        .position(x: 14 + CGFloat(offset) * 8, y: marginY + (CGFloat(index) + 0.5) * pitch)
+                        .accessibilityLabel(item.label)
+                }
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private var shownMarks: [PageMark] {
+        if !marks.isEmpty { return marks }
+        return markedLines.sorted().map { PageMark(id: "line-\($0)", line: $0, color: mark, label: "Note on line \($0)") }
     }
 }
 
