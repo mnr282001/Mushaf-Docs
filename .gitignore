@@ -1,0 +1,8 @@
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+scripts/cache/
+Resources/Fonts/
+Resources/mushaf.sqlite
