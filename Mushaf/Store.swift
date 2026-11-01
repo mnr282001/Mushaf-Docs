@@ -40,6 +40,7 @@ struct MushafPage: Identifiable, Hashable {
     var firstAyah: String
     var lastAyah: String
     var surahName: String
+    var surahTranslit: String
     var lines: [MushafLine]
     var id: Int { number }
     var opening: Bool { number <= 2 }
@@ -137,8 +138,8 @@ final class MushafStore {
             lines[index].words = words[lines[index].number] ?? []
         }
         let surahID = lines.first(where: { $0.surah != nil })?.surah ?? lines.flatMap(\.words).first?.surah ?? 1
-        let name = surahs.first(where: { $0.id == surahID })?.name ?? ""
-        let page = MushafPage(number: number, juz: row.0, hizb: row.1, firstAyah: row.2, lastAyah: row.3, surahName: name, lines: lines)
+        let info = surahs.first(where: { $0.id == surahID })
+        let page = MushafPage(number: number, juz: row.0, hizb: row.1, firstAyah: row.2, lastAyah: row.3, surahName: info?.name ?? "", surahTranslit: info?.translit ?? "", lines: lines)
         cache[number] = page
         if cache.count > 12, let drop = cache.keys.first(where: { abs($0 - number) > 3 }) {
             cache.removeValue(forKey: drop)

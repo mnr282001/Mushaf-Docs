@@ -439,11 +439,22 @@ struct ReaderView: View {
         let paired = landscape && !sidebar
         let right = paired ? ((page - 1) / 2) * 2 + 1 : page
         let label = paired ? "\(right)–\(min(604, right + 1))" : "\(page)"
-        let name = store.page(right)?.surahName ?? ""
-        let juz = store.page(right)?.juz ?? 1
+        let current = store.page(right)
+        let name = current?.surahName ?? ""
+        let translit = current?.surahTranslit ?? ""
+        let juz = current?.juz ?? 1
         return HStack(spacing: 8) {
             Button { showSurahs = true } label: {
-                Text(name).lineLimit(1).truncationMode(.tail)
+                HStack(spacing: 6) {
+                    Text(name).lineLimit(1).truncationMode(.tail)
+                    if !translit.isEmpty {
+                        Text(translit)
+                            .font(MushafType.uiSmall)
+                            .foregroundStyle(palette.uiSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
             }
             .frame(minHeight: 44)
             .layoutPriority(-1)
@@ -613,6 +624,10 @@ struct ReaderView: View {
                                             .foregroundStyle(palette.uiSecondary)
                                             .frame(width: 32, alignment: .trailing)
                                         Text(surah.name).foregroundStyle(palette.uiInk)
+                                        Text(surah.translit)
+                                            .font(MushafType.uiSmall)
+                                            .foregroundStyle(palette.uiSecondary)
+                                            .lineLimit(1)
                                         Spacer()
                                         Text("\(surah.page)")
                                             .font(MushafType.uiSmall.monospacedDigit())
