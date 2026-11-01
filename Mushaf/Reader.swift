@@ -14,6 +14,7 @@ struct ReaderView: View {
     @Query(filter: #Predicate<Annotation> { $0.kind == "highlight" }) private var highlights: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "sidebar" }) private var sideNotes: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "sticky" }) private var stickies: [Annotation]
+    @Query(filter: #Predicate<Annotation> { $0.kind != "interlinear" && $0.kind != "sidebar" && $0.kind != "sticky" && $0.kind != "highlight" }) private var otherNotes: [Annotation]
     @State private var store = MushafStore()
     @State private var notebook: Notebook?
     @State private var page = ReaderView.initialPage
@@ -21,6 +22,7 @@ struct ReaderView: View {
     @State private var sidebar = ProcessInfo.processInfo.arguments.contains("-sidebar")
     @State private var stickiesOn = ProcessInfo.processInfo.arguments.contains("-sticky")
     @State private var madeStickies: [Annotation] = []
+    @State private var madeUnknown: [Annotation] = []
     @State private var madeSidebar: [Annotation] = []
     @State private var chrome = false
     @State private var showSurahs = false
@@ -146,6 +148,18 @@ struct ReaderView: View {
                         )
                         .frame(width: fitted.width, height: fitted.height)
                     }
+                    let unknown = unknownNotes(on: item.number)
+                    if !unknown.isEmpty {
+                        UnsupportedNotes(
+                            notes: unknown,
+                            paper: palette.paper,
+                            ink: palette.uiInk,
+                            page: fitted,
+                            room: max(48, (size.width - (landscape ? 32 : 56) - fitted.width) / 2)
+                        )
+                        .frame(width: fitted.width, height: fitted.height)
+                        .environment(\.layoutDirection, .leftToRight)
+                    }
                 }
                 .frame(width: fitted.width, height: fitted.height)
             }
@@ -249,6 +263,7 @@ struct ReaderView: View {
         if ProcessInfo.processInfo.arguments.contains("-highlight") { seedHighlight() }
         if ProcessInfo.processInfo.arguments.contains("-sidebar") { seedSidebar() }
         if ProcessInfo.processInfo.arguments.contains("-sticky") { seedSticky() }
+        if ProcessInfo.processInfo.arguments.contains("-unknown") { seedUnknown() }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -586,6 +601,28 @@ struct ReaderView: View {
         note.layout = Notes.encoded(layout)
         context.insert(note)
         madeStickies.append(note)
+    }
+
+    private func unknownNotes(on page: Int) -> [Annotation] {
+        let visible = Set(NotebookSession.ids(visibleNotebookIDs))
+        var seen = Set<UUID>()
+        return (otherNotes + madeUnknown).filter { note in
+            note.page == page
+                && !AnnotationRegistry.knows(note.kind)
+                && visible.contains(note.notebook?.id ?? UUID())
+                && seen.insert(note.id).inserted
+        }
+    }
+
+    private func seedUnknown() {
+        guard let notebook, !otherNotes.contains(where: { $0.page == 1 && $0.kind == "voice" && $0.notebook?.id == notebook.id }) else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "voice"
+        note.page = 1
+        note.line = 3
+        context.insert(note)
+        madeUnknown.append(note)
     }
 
     private func seedSidebar() {
