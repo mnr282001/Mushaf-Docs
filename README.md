@@ -1,6 +1,6 @@
 <!-- HERO SECTION -->
 <p align="center">
-  <img src="docs/preview/hero.png" alt="Mushaf — paper page on a quiet desk" width="600">
+  <img src="docs/preview/plain-page.png" alt="Mushaf — Al-Fatihah on a quiet desk" width="420">
   <br>
   <strong>A printed Madani mushaf that opens between the lines for your notes, then closes back to a quiet page.</strong>
 </p>
@@ -24,7 +24,7 @@ Mushaf is an iPad reader for the 15-line Madani mushaf: 604 pages, right-to-left
 
 ### 🎨 Visual Preview & Presentation
 
-> Drop screenshots into `docs/preview/`. The page should read as paper on a slightly darker desk: portrait is one sheet, landscape is a facing spread with the odd page on the right. Crop to the page, not the simulator chrome.
+> Paper on a slightly darker desk. Portrait is one sheet. Landscape is a facing spread, odd page on the right.
 
 <table>
   <tr>
@@ -36,15 +36,15 @@ Mushaf is an iPad reader for the 15-line Madani mushaf: 604 pages, right-to-left
     <td width="50%" align="center" valign="top">
       <img src="docs/preview/interlinear.png" alt="Interlinear bands open under each line, Pencil ink in the active notebook" width="100%">
       <br>
-      <sub><b>Open page</b> · Interlinear bands, active notebook tint on the leading edge, highlights behind the words.</sub>
+      <sub><b>Open page</b> · Interlinear bands, with a typed note in the active notebook.</sub>
     </td>
   </tr>
 </table>
 
 <p align="center">
-  <img src="docs/preview/spread.png" alt="Landscape facing pages, odd page on the right, sidebar on the outer margin" width="860">
+  <img src="docs/preview/spread.png" alt="Landscape facing pages, odd page on the right" width="860">
   <br>
-  <sub>Landscape spread · odd page on the right. Sidebar cards align to their line; stickies sit on the desk, or collapse to a dot.</sub>
+  <sub>Landscape spread · odd page on the right.</sub>
 </p>
 
 ---
