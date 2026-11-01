@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 @main
@@ -6,5 +7,6 @@ struct MushafApp: App {
         WindowGroup {
             ReaderView()
         }
+        .modelContainer(for: [Notebook.self, Annotation.self])
     }
 }

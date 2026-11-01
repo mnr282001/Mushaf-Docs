@@ -1,12 +1,17 @@
+import SwiftData
 import SwiftUI
 
 struct ReaderView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.modelContext) private var context
     @AppStorage("mushaf.theme") private var themeRaw = MushafTheme.auto.rawValue
     @AppStorage("mushaf.lastPage") private var lastPage = 1
+    @Query(filter: #Predicate<Annotation> { $0.kind == "interlinear" }) private var writings: [Annotation]
     @State private var store = MushafStore()
+    @State private var notebook: Notebook?
     @State private var page = ReaderView.initialPage
+    @State private var interlinear = ReaderView.notesAtLaunch
     @State private var chrome = false
     @State private var showSurahs = false
     @State private var showJuz = false
@@ -62,6 +67,7 @@ struct ReaderView: View {
                 }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: chrome)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: interlinear)
         }
         .onChange(of: page) { _, new in
             if !screenshotLocked { lastPage = new }
@@ -70,6 +76,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showSurahs) { surahSheet }
         .sheet(isPresented: $showJuz) { juzSheet }
         .sheet(isPresented: $showTokens) { TokenPreview() }
+        .task { prepareNotes() }
     }
 
     private func spread(_ index: Int, landscape: Bool, in size: CGSize) -> some View {
@@ -78,11 +85,51 @@ struct ReaderView: View {
         let fitted = pageSize(pages: pages.count, in: CGSize(width: size.width - (landscape ? 32 : 56), height: size.height - 152))
         return HStack(spacing: 18) {
             ForEach(pages) { item in
-                MushafPageView(page: item).frame(width: fitted.width, height: fitted.height)
+                pageFace(item, width: fitted.width, height: fitted.height)
             }
         }
         .environment(\.layoutDirection, .rightToLeft)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func pageFace(_ item: MushafPage, width: CGFloat, height: CGFloat) -> some View {
+        Group {
+            if interlinear, let notebook {
+                InterlinearPage(page: item, notebook: notebook, notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id })
+            } else {
+                MushafPageView(page: item, markedLines: marked(on: item.number), mark: markColor)
+            }
+        }
+        .frame(width: width, height: height)
+    }
+
+    private var markColor: Color {
+        (NotebookHue.all.first { $0.name == "Teal" } ?? NotebookHue.all[0]).resolved(night: palette.isNight).tint
+    }
+
+    private func marked(on page: Int) -> Set<Int> {
+        guard let notebook else { return [] }
+        return Set(writings.filter { $0.page == page && $0.notebook?.id == notebook.id }.compactMap(\.line))
+    }
+
+    private func prepareNotes() {
+        if notebook == nil {
+            let book = (try? context.fetch(FetchDescriptor<Notebook>()))?.first ?? Notebook()
+            if book.modelContext == nil { context.insert(book) }
+            notebook = book
+        }
+        guard ProcessInfo.processInfo.arguments.contains("-sample-note"),
+              let notebook,
+              !writings.contains(where: { $0.page == 1 && $0.line == 4 }) else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "interlinear"
+        note.page = 1
+        note.line = 4
+        note.ayahStart = "1:2"
+        note.ayahEnd = "1:2"
+        note.drawing = Notes.sampleDrawing()
+        context.insert(note)
     }
 
     private func pageSize(pages: Int, in available: CGSize) -> CGSize {
@@ -113,6 +160,14 @@ struct ReaderView: View {
             Text("·").foregroundStyle(palette.uiSecondary)
             Text(label).font(MushafType.ui.monospacedDigit())
             Spacer()
+            Button {
+                prepareNotes()
+                interlinear.toggle()
+            } label: {
+                Image(systemName: interlinear ? "pencil.line" : "pencil")
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(interlinear ? "Close interlinear notes" : "Interlinear notes")
             Menu {
                 ForEach(MushafTheme.allCases) { item in
                     Button(item.title) { themeRaw = item.rawValue }
@@ -221,5 +276,9 @@ struct ReaderView: View {
 
     private static var locked: Bool {
         ProcessInfo.processInfo.arguments.contains("-page")
+    }
+
+    private static var notesAtLaunch: Bool {
+        ProcessInfo.processInfo.arguments.contains("-notes")
     }
 }

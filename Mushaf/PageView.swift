@@ -3,18 +3,38 @@ import UIKit
 
 struct MushafPageView: View {
     var page: MushafPage
+    var markedLines: Set<Int> = []
+    var mark: Color = Color(hex: 0x2E7D6B)
     @Environment(\.palette) private var palette
 
     var body: some View {
         PageCanvas(page: page, palette: palette)
             .background(palette.paper)
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
+            .overlay { marks }
+    }
+
+    private var marks: some View {
+        GeometryReader { geo in
+            let marginY = geo.size.height * 0.055
+            let pitch = (geo.size.height - marginY * 2) / CGFloat(max(page.lines.count, 1))
+            ForEach(page.lines.filter { markedLines.contains($0.number) }) { line in
+                let index = page.lines.firstIndex { $0.number == line.number } ?? 0
+                Circle()
+                    .fill(mark)
+                    .frame(width: 4, height: 4)
+                    .position(x: 14, y: marginY + (CGFloat(index) + 0.5) * pitch)
+                    .accessibilityLabel("Note on line \(line.number)")
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
 struct PageCanvas: UIViewRepresentable {
     var page: MushafPage
     var palette: Palette
+    var line: Int? = nil
 
     func makeUIView(context: Context) -> PageDrawView {
         let view = PageDrawView()
@@ -28,6 +48,7 @@ struct PageCanvas: UIViewRepresentable {
     func updateUIView(_ view: PageDrawView, context: Context) {
         view.page = page
         view.palette = palette
+        view.line = line
         view.hold(page.number)
         view.setNeedsDisplay()
     }
@@ -36,6 +57,7 @@ struct PageCanvas: UIViewRepresentable {
 final class PageDrawView: UIView {
     var page: MushafPage?
     var palette: Palette = .paper
+    var line: Int?
     private let qpc = QPCRenderer()
     private let uthmani = UthmaniRenderer()
     private var held: Int?
@@ -58,11 +80,12 @@ final class PageDrawView: UIView {
     override func draw(_ rect: CGRect) {
         guard let page, let ctx = UIGraphicsGetCurrentContext() else { return }
         let marginX = bounds.width * 0.078
-        let marginY = bounds.height * 0.055
+        let focused = line.flatMap { number in page.lines.firstIndex { $0.number == number } }
+        let marginY = focused == nil ? bounds.height * 0.055 : 0
         let textWidth = bounds.width - marginX * 2
-        let textHeight = bounds.height - marginY * 2
+        let textHeight = bounds.height - (focused == nil ? bounds.height * 0.055 * 2 : 0)
         let count = max(page.lines.count, 1)
-        let pitch = textHeight / CGFloat(count)
+        let pitch = focused == nil ? textHeight / CGFloat(count) : bounds.height
         let renderer: MushafRendering = FontBook.shared.pageFont(page.number) == nil ? uthmani : qpc
         let fontSize = fittedSize(page, renderer: renderer, textWidth: textWidth)
 
@@ -74,7 +97,8 @@ final class PageDrawView: UIView {
         var frames: [WordFrame] = []
         var elements: [UIAccessibilityElement] = []
         for (index, line) in page.lines.enumerated() {
-            let top = marginY + CGFloat(index) * pitch
+            if let focused, index != focused { continue }
+            let top = focused == nil ? marginY + CGFloat(index) * pitch : 0
             let baseline = bounds.height - (top + pitch * 0.70)
             let slot = CGRect(x: marginX, y: top, width: textWidth, height: pitch)
             switch line.kind {
