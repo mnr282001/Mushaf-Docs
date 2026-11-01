@@ -2,6 +2,8 @@
 
 iPad app (SwiftUI, iPadOS 26+) showing the 15-line Madani mushaf (604 pages, ~20 per juz) with layered notes — handwritten and typed — organized into notebooks. The page itself never changes; notes are layers on top.
 
+**Companion doc:** `DESIGN.md` defines the look, feel, colour tokens, typography, gestures and motion. This plan covers architecture; when they touch the same thing (e.g. band height, layers), DESIGN.md wins on presentation, this plan on data.
+
 **Scope decisions (locked):**
 - Madani 15-line layout only. No IndoPak or other layouts.
 - Personal use first. Notebook sharing (classmates) is a future goal — design for it, don't build it.
@@ -205,7 +207,7 @@ Implementation: page = `ZStack` of text layer + one layer per enabled `Placement
 ## 11. Build order
 
 1. **Data pipeline:** script builds `mushaf.sqlite` from `raw/qurancom` + `quran.db`; fetch `code_v2` + QPC v2 fonts; record sources/licenses.
-2. **Render** one page exactly; then all 604 with RTL paging, surah/juz navigation, word hit-testing, last page remembered.
+2. **Render** one page exactly; then all 604 with RTL paging, surah/juz navigation, word hit-testing, last page remembered. Includes the design foundation: theme tokens, page-on-desk canvas, hidden chrome (DESIGN.md §3–5).
 3. **SwiftData models**, default notebook, interlinear mode with PencilKit and growing bands + manual height.
 4. Typed text in note slots; pen/keyboard toggle.
 5. Multiple notebooks, active vs read-only layers, notebook page index.
