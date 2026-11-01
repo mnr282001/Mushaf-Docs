@@ -115,12 +115,28 @@ struct ReaderView: View {
     private func pageFace(_ item: MushafPage, width: CGFloat, height: CGFloat) -> some View {
         Group {
             if interlinear, let notebook {
-                InterlinearPage(page: item, notebook: notebook, notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id }, typeLine: Self.typeAtLaunch ? 4 : nil)
+                InterlinearPage(
+                    page: item,
+                    notebook: notebook,
+                    notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id },
+                    others: readLayers(on: item.number),
+                    onSwitch: { activate($0) },
+                    typeLine: Self.typeAtLaunch ? 4 : nil
+                )
             } else {
                 MushafPageView(page: item, marks: marginMarks(on: item.number))
             }
         }
         .frame(width: width, height: height)
+    }
+
+    private func readLayers(on page: Int) -> [ReadLayer] {
+        let active = notebook?.id
+        return NotebookSession.ids(visibleNotebookIDs).filter { $0 != active }.compactMap { id in
+            let notes = writings.filter { $0.page == page && $0.notebook?.id == id && !Notes.layout(of: $0.layout).hidden }
+            guard let book = notes.first?.notebook else { return nil }
+            return ReadLayer(notebook: book, notes: notes)
+        }
     }
 
     private func marginMarks(on page: Int) -> [PageMark] {
@@ -368,13 +384,17 @@ struct ReaderView: View {
     }
 
     private func openNotebook(_ book: Notebook) {
+        activate(book)
+        page = min(604, max(1, book.lastOpenedPage))
+        showNotebooks = false
+    }
+
+    private func activate(_ book: Notebook) {
         notebook = book
         activeNotebookID = book.id.uuidString
         var visible = NotebookSession.ids(visibleNotebookIDs).filter { $0 != book.id }
         visible.insert(book.id, at: 0)
         visibleNotebookIDs = NotebookSession.raw(Array(visible.prefix(3)))
-        page = min(604, max(1, book.lastOpenedPage))
-        showNotebooks = false
     }
 
     private func seedClassNotebook() {
@@ -387,15 +407,25 @@ struct ReaderView: View {
             context.insert(made)
             return made
         }()
-        guard !(book.annotations ?? []).contains(where: { $0.page == 50 }) else { return }
-        let note = Annotation()
-        note.notebook = book
-        note.kind = "interlinear"
-        note.page = 50
-        note.line = 1
-        note.ayahStart = "3:1"
-        note.ayahEnd = "3:1"
-        context.insert(note)
+        let note = (book.annotations ?? []).first { $0.page == 50 } ?? {
+            let made = Annotation()
+            made.notebook = book
+            made.kind = "interlinear"
+            made.page = 50
+            made.line = 1
+            made.ayahStart = "3:1"
+            made.ayahEnd = "3:1"
+            context.insert(made)
+            return made
+        }()
+        if !Notes.hasText(note.text), !Notes.hasInk(note.drawing) {
+            note.text = Notes.sampleText()
+        }
+        var visible = NotebookSession.ids(visibleNotebookIDs)
+        if !visible.contains(book.id), visible.count < 3 {
+            visible.append(book.id)
+            visibleNotebookIDs = NotebookSession.raw(visible)
+        }
     }
 
     private var juzSheet: some View {

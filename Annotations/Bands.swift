@@ -2,10 +2,25 @@ import PencilKit
 import SwiftData
 import SwiftUI
 
+struct ReadLayer: Identifiable {
+    var notebook: Notebook
+    var notes: [Annotation]
+    var id: UUID { notebook.id }
+}
+
+private struct LineRead: Identifiable {
+    var note: Annotation
+    var layer: ReadLayer
+    var first: Bool
+    var id: UUID { note.id }
+}
+
 struct InterlinearPage: View {
     var page: MushafPage
     var notebook: Notebook
     var notes: [Annotation]
+    var others: [ReadLayer] = []
+    var onSwitch: (Notebook) -> Void = { _ in }
     var typeLine: Int? = nil
     @Environment(\.palette) private var palette
     @Environment(\.modelContext) private var context
@@ -19,7 +34,7 @@ struct InterlinearPage: View {
             let closed = geo.size.width * 1.62
             let marginY = closed * 0.055
             let pitch = (closed - marginY * 2) / CGFloat(max(page.lines.count, 1))
-            let hue = (NotebookHue.all.first { $0.name == "Teal" } ?? NotebookHue.all[0]).resolved(night: palette.isNight)
+            let hue = NotebookSession.hue(hex: notebook.colorHex).resolved(night: palette.isNight)
             let textWidth = geo.size.width * 0.844
             ScrollViewReader { proxy in
             ScrollView {
@@ -74,6 +89,24 @@ struct InterlinearPage: View {
                                 .padding(.bottom, 12)
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                             }
+                            ForEach(readNotes(on: line.number)) { item in
+                                ReadOnlyNote(
+                                    title: item.layer.notebook.title,
+                                    showTitle: item.first,
+                                    pitch: pitch,
+                                    width: textWidth,
+                                    margin: geo.size.width * 0.078,
+                                    hue: NotebookSession.hue(hex: item.layer.notebook.colorHex).resolved(night: palette.isNight),
+                                    surface: palette.desk,
+                                    paper: palette.paper,
+                                    drawing: item.note.drawing ?? Data(),
+                                    text: item.note.text ?? Data(),
+                                    manual: Notes.layout(of: item.note.layout).manual,
+                                    onSwitch: { onSwitch(item.layer.notebook) }
+                                )
+                                .padding(.top, 6)
+                                .padding(.bottom, 8)
+                            }
                         }
                         .id(line.id)
                     }
@@ -86,6 +119,7 @@ struct InterlinearPage: View {
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: notes.count)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: made.count)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: reveal)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: others.map(\.id))
         }
             .background(palette.paper)
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
@@ -94,6 +128,14 @@ struct InterlinearPage: View {
                       let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
                 keyboard = max(0, scene.screen.bounds.maxY - frame.minY)
             }
+    }
+
+    private func readNotes(on line: Int) -> [LineRead] {
+        others.compactMap { layer in
+            guard let note = layer.notes.first(where: { $0.line == line }) else { return nil }
+            let first = layer.notes.compactMap(\.line).min() == line
+            return LineRead(note: note, layer: layer, first: first)
+        }
     }
 
     private func note(_ line: Int) -> Annotation? {
@@ -184,6 +226,87 @@ struct InterlinearPage: View {
         guard !layout.hidden, !Notes.hasInk(item.drawing), !Notes.hasText(item.text), layout.manual == nil else { return }
         context.delete(item)
         made[line] = nil
+    }
+}
+
+private struct ReadOnlyNote: View {
+    var title: String
+    var showTitle: Bool
+    var pitch: CGFloat
+    var width: CGFloat
+    var margin: CGFloat
+    var hue: NotebookHue
+    var surface: Color
+    var paper: Color
+    var drawing: Data
+    var text: Data
+    var manual: Double?
+    var onSwitch: () -> Void
+    @State private var confirming = false
+
+    private var height: CGFloat {
+        Notes.bandHeight(pitch: pitch, drawing: drawing, text: text, width: width, manual: manual)
+    }
+
+    var body: some View {
+        Button { confirming = true } label: {
+            ZStack(alignment: .topLeading) {
+                ZStack(alignment: .topLeading) {
+                    RuledLines(spacing: Notes.rulePitch, color: hue.tint.opacity(0.28))
+                    BandCanvas(drawingData: drawing, ink: hue.ink.uiColor, acceptsPencil: false, onChange: { _ in }, onBegin: {})
+                    if let raw = Notes.attributed(text), !raw.string.isEmpty {
+                        Text(AttributedString(raw))
+                            .font(Font(Notes.noteFont))
+                            .foregroundStyle(hue.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, showTitle ? 32 : 4)
+                            .padding(.horizontal, 8)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .frame(height: height + (showTitle ? 28 : 0))
+                .background { slip }
+                .environment(\.layoutDirection, .rightToLeft)
+                .opacity(0.55)
+                if showTitle {
+                    Text(title)
+                        .font(MushafType.uiSmall)
+                        .foregroundStyle(hue.ink)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(paper, in: Capsule())
+                        .overlay { Capsule().strokeBorder(hue.tint.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [2, 2])) }
+                        .padding(8)
+                        .environment(\.layoutDirection, .leftToRight)
+                }
+            }
+            .padding(.horizontal, margin)
+            .environment(\.layoutDirection, .leftToRight)
+        }
+        .buttonStyle(.plain)
+        .confirmationDialog("Switch to \(title)?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Switch to \(title)") { onSwitch() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .accessibilityLabel("\(title), read only")
+        .accessibilityHint("Switches to this notebook")
+    }
+
+    private var slip: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(surface)
+            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hue.wash.opacity(hue.washOpacity)) }
+            .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(hue.tint.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [3, 3])) }
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [2, 3]))
+                    .foregroundStyle(hue.tint)
+                    .frame(width: 4)
+                    .padding(.vertical, 8)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
