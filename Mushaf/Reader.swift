@@ -13,11 +13,14 @@ struct ReaderView: View {
     @Query(filter: #Predicate<Annotation> { $0.kind == "interlinear" }) private var writings: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "highlight" }) private var highlights: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "sidebar" }) private var sideNotes: [Annotation]
+    @Query(filter: #Predicate<Annotation> { $0.kind == "sticky" }) private var stickies: [Annotation]
     @State private var store = MushafStore()
     @State private var notebook: Notebook?
     @State private var page = ReaderView.initialPage
     @State private var interlinear = ReaderView.notesAtLaunch
     @State private var sidebar = ProcessInfo.processInfo.arguments.contains("-sidebar")
+    @State private var stickiesOn = ProcessInfo.processInfo.arguments.contains("-sticky")
+    @State private var madeStickies: [Annotation] = []
     @State private var madeSidebar: [Annotation] = []
     @State private var chrome = false
     @State private var showSurahs = false
@@ -118,7 +121,33 @@ struct ReaderView: View {
                     .frame(width: column, height: fitted.height)
             }
             ForEach(pages) { item in
-                pageFace(item, width: fitted.width, height: fitted.height)
+                ZStack {
+                    pageFace(item, width: fitted.width, height: fitted.height)
+                    if stickiesOn {
+                        StickyBoard(
+                            notes: stickyPool.filter { $0.page == item.number && ($0.notebook?.id == notebook?.id || NotebookSession.ids(visibleNotebookIDs).contains($0.notebook?.id ?? UUID())) },
+                            hue: NotebookSession.hue(hex: notebook?.colorHex ?? "#2E7D6B").resolved(night: palette.isNight),
+                            paper: palette.paper,
+                            ink: palette.uiInk,
+                            room: max(48, (size.width - (landscape ? 32 : 56) - fitted.width) / 2),
+                            onMove: { note, x, y, collapsed in
+                                var layout = Notes.layout(of: note.layout)
+                                layout.x = x
+                                layout.y = y
+                                layout.collapsed = collapsed
+                                note.layout = Notes.encoded(layout)
+                                note.updatedAt = Date()
+                            },
+                            onText: { note, data in
+                                note.text = data
+                                note.updatedAt = Date()
+                            },
+                            onDelete: { context.delete($0) }
+                        )
+                        .frame(width: fitted.width, height: fitted.height)
+                    }
+                }
+                .frame(width: fitted.width, height: fitted.height)
             }
             if sidebar, !onRight, let item = pages.first {
                 sidebarColumn(item, height: fitted.height, leadsRight: true)
@@ -219,6 +248,7 @@ struct ReaderView: View {
         if ProcessInfo.processInfo.arguments.contains("-notebooks") { seedClassNotebook() }
         if ProcessInfo.processInfo.arguments.contains("-highlight") { seedHighlight() }
         if ProcessInfo.processInfo.arguments.contains("-sidebar") { seedSidebar() }
+        if ProcessInfo.processInfo.arguments.contains("-sticky") { seedSticky() }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -325,6 +355,18 @@ struct ReaderView: View {
                     .foregroundStyle(sidebar ? palette.accent : palette.uiInk)
             }
             .accessibilityLabel(sidebar ? "Hide sidebar" : "Sidebar")
+            Button {
+                prepareNotes()
+                stickiesOn.toggle()
+                if stickiesOn, stickyPool.filter({ $0.page == page && $0.notebook?.id == notebook?.id }).isEmpty {
+                    addSticky(on: page)
+                }
+            } label: {
+                Image(systemName: "note")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(stickiesOn ? palette.accent : palette.uiInk)
+            }
+            .accessibilityLabel(stickiesOn ? "Hide stickies" : "Stickies")
             Button {
                 prepareNotes()
                 interlinear.toggle()
@@ -503,6 +545,47 @@ struct ReaderView: View {
     private var sidebarPool: [Annotation] {
         var seen = Set<UUID>()
         return (sideNotes + madeSidebar).filter { seen.insert($0.id).inserted }
+    }
+
+    private var stickyPool: [Annotation] {
+        var seen = Set<UUID>()
+        return (stickies + madeStickies).filter { seen.insert($0.id).inserted }
+    }
+
+    private func addSticky(on page: Int) {
+        prepareNotes()
+        guard let notebook, let item = store.page(page) else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "sticky"
+        note.page = page
+        note.line = 1
+        var layout = BandLayout()
+        layout.x = -0.02
+        layout.y = 0.2
+        note.layout = Notes.encoded(layout)
+        if let word = item.lines.first(where: { $0.kind == "ayah" })?.words.first {
+            note.ayahStart = "\(word.surah):\(word.ayah)"
+            note.ayahEnd = note.ayahStart
+        }
+        context.insert(note)
+        madeStickies.append(note)
+    }
+
+    private func seedSticky() {
+        guard let notebook, !stickies.contains(where: { $0.page == 1 && $0.notebook?.id == notebook.id }) else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "sticky"
+        note.page = 1
+        note.line = 2
+        note.text = Notes.sampleText()
+        var layout = BandLayout()
+        layout.x = -0.02
+        layout.y = 0.18
+        note.layout = Notes.encoded(layout)
+        context.insert(note)
+        madeStickies.append(note)
     }
 
     private func seedSidebar() {

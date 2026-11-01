@@ -5,25 +5,37 @@ import PencilKit
 struct BandLayout: Codable {
     var manual: Double?
     var hidden: Bool
+    var x: Double?
+    var y: Double?
+    var collapsed: Bool
 
-    init(manual: Double? = nil, hidden: Bool = false) {
+    init(manual: Double? = nil, hidden: Bool = false, x: Double? = nil, y: Double? = nil, collapsed: Bool = false) {
         self.manual = manual
         self.hidden = hidden
+        self.x = x
+        self.y = y
+        self.collapsed = collapsed
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         manual = try container.decodeIfPresent(Double.self, forKey: .manual)
         hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        x = try container.decodeIfPresent(Double.self, forKey: .x)
+        y = try container.decodeIfPresent(Double.self, forKey: .y)
+        collapsed = try container.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(manual, forKey: .manual)
         if hidden { try container.encode(true, forKey: .hidden) }
+        try container.encodeIfPresent(x, forKey: .x)
+        try container.encodeIfPresent(y, forKey: .y)
+        if collapsed { try container.encode(true, forKey: .collapsed) }
     }
 
-    private enum CodingKeys: String, CodingKey { case manual, hidden }
+    private enum CodingKeys: String, CodingKey { case manual, hidden, x, y, collapsed }
 }
 
 @Model
