@@ -12,6 +12,7 @@ struct InterlinearPage: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var made: [Int: Annotation] = [:]
     @State private var keyboard: CGFloat = 0
+    @State private var reveal = 0
 
     var body: some View {
         GeometryReader { geo in
@@ -30,7 +31,7 @@ struct InterlinearPage: View {
                                 .frame(height: pitch)
                                 .accessibilityLabel(line.spoken)
                                 .overlay(alignment: .trailing) {
-                                    if note(line.number) == nil {
+                                    if !bandOpen(line.number) {
                                         addNote(line, hue: hue, margin: geo.size.width * 0.078) {
                                             if reduceMotion {
                                                 proxy.scrollTo(line.id, anchor: .center)
@@ -40,7 +41,7 @@ struct InterlinearPage: View {
                                         }
                                     }
                                 }
-                            if note(line.number) != nil {
+                            if bandOpen(line.number) {
                                 NoteBand(
                                     pitch: pitch,
                                     width: textWidth,
@@ -59,6 +60,8 @@ struct InterlinearPage: View {
                                     onDrawing: { setDrawing($0, line: line) },
                                     onText: { setText($0, line: line) },
                                     onManual: { setManual($0, line: line) },
+                                    onHide: { setHidden(true, line: line.number) },
+                                    onDelete: { remove(line.number) },
                                     onEdit: {
                                         if reduceMotion {
                                             proxy.scrollTo(line.id, anchor: .center)
@@ -82,6 +85,7 @@ struct InterlinearPage: View {
             .background(palette.paper)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: notes.count)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: made.count)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: reveal)
         }
             .background(palette.paper)
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
@@ -96,22 +100,26 @@ struct InterlinearPage: View {
         made[line] ?? notes.first { $0.line == line }
     }
 
+    private func bandOpen(_ line: Int) -> Bool {
+        guard let item = note(line) else { return false }
+        return !Notes.layout(of: item.layout).hidden
+    }
+
     private func addNote(_ line: MushafLine, hue: NotebookHue, margin: CGFloat, scroll: @escaping () -> Void) -> some View {
-        Button {
-            setManual(Notes.starterHeight, line: line)
+        let hidden = note(line.number).map { Notes.layout(of: $0.layout).hidden } ?? false
+        return Button {
+            if hidden {
+                setHidden(false, line: line.number)
+            } else {
+                setManual(Notes.starterHeight, line: line)
+            }
             scroll()
         } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(hue.ink)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(palette.paper))
-                .overlay(Circle().strokeBorder(hue.tint, lineWidth: 1.5))
-                .frame(width: 44, height: 44)
+            NoteTool(symbol: "plus", ink: hue.ink, plate: palette.paper, rule: hue.tint.opacity(0.35))
         }
         .buttonStyle(.plain)
-        .padding(.trailing, max(0, (margin - 44) / 2))
-        .accessibilityLabel("Add a note on line \(line.number)")
+        .padding(.trailing, max(0, (margin - 36) / 2))
+        .accessibilityLabel(hidden ? "Show note on line \(line.number)" : "Add a note on line \(line.number)")
     }
 
     private func ensure(_ line: MushafLine) -> Annotation {
@@ -155,8 +163,25 @@ struct InterlinearPage: View {
         dropIfEmpty(item, line: line.number)
     }
 
+    private func setHidden(_ hidden: Bool, line: Int) {
+        guard let item = note(line) else { return }
+        var layout = Notes.layout(of: item.layout)
+        layout.hidden = hidden
+        item.layout = Notes.encoded(layout)
+        item.updatedAt = Date()
+        reveal += 1
+    }
+
+    private func remove(_ line: Int) {
+        guard let item = note(line) else { return }
+        context.delete(item)
+        made[line] = nil
+        reveal += 1
+    }
+
     private func dropIfEmpty(_ item: Annotation, line: Int) {
-        guard !Notes.hasInk(item.drawing), !Notes.hasText(item.text), Notes.layout(of: item.layout).manual == nil else { return }
+        let layout = Notes.layout(of: item.layout)
+        guard !layout.hidden, !Notes.hasInk(item.drawing), !Notes.hasText(item.text), layout.manual == nil else { return }
         context.delete(item)
         made[line] = nil
     }
@@ -180,6 +205,8 @@ struct NoteBand: View {
     var onDrawing: (Data) -> Void
     var onText: (Data) -> Void
     var onManual: (CGFloat?) -> Void
+    var onHide: () -> Void
+    var onDelete: () -> Void
     var onEdit: () -> Void
     @State private var dragStart: CGFloat?
     @State private var focused = false
@@ -197,12 +224,17 @@ struct NoteBand: View {
                 Color.clear.frame(width: margin)
             }
             .environment(\.layoutDirection, .leftToRight)
-            HStack(spacing: 0) {
-                controls
-                    .frame(width: margin, height: height, alignment: .top)
-                Spacer(minLength: 0)
-            }
-            .environment(\.layoutDirection, .leftToRight)
+        }
+        .overlay(alignment: .topLeading) {
+            toolbar
+                .padding(.leading, margin + 8)
+                .padding(.top, 6)
+                .environment(\.layoutDirection, .leftToRight)
+        }
+        .overlay(alignment: .bottomLeading) {
+            resizeHandle
+                .padding(.leading, max(0, (margin - 36) / 2))
+                .environment(\.layoutDirection, .leftToRight)
         }
         .onAppear {
             guard startsTyping else { return }
@@ -240,44 +272,52 @@ struct NoteBand: View {
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
 
-    private var controls: some View {
-        ZStack(alignment: .top) {
-            VStack {
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.up.and.down")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(ink)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(paper))
-                    .overlay(Circle().strokeBorder(tint, lineWidth: 1.5))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                    .gesture(resize)
-                    .onTapGesture(count: 2) { onManual(nil) }
-                    .accessibilityLabel("Resize note")
-                    .accessibilityHint("Drag to change the height. Double-tap to fit the writing.")
-                    .accessibilityAdjustableAction { direction in
-                        if direction == .increment {
-                            onManual(height + Notes.rulePitch)
-                        } else {
-                            onManual(max(pitch * 0.6, height - Notes.rulePitch))
-                        }
-                    }
+    private var toolbar: some View {
+        HStack(spacing: 0) {
+            Button(action: onHide) {
+                NoteTool(symbol: "minus", ink: ink)
             }
+            .accessibilityLabel("Hide note")
+            hairline
+            Button(action: onDelete) {
+                NoteTool(symbol: "trash", ink: ink)
+            }
+            .accessibilityLabel("Delete note")
             if focused {
+                hairline
                 Button {
                     typing.toggle()
                     if typing { onEdit() }
                 } label: {
-                    Image(systemName: typing ? "pencil.tip" : "keyboard")
-                        .font(MushafType.ui)
-                        .frame(width: 44, height: 44)
+                    NoteTool(symbol: typing ? "pencil.tip" : "keyboard", ink: ink)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(ink)
                 .accessibilityLabel(typing ? "Pen" : "Keyboard")
             }
         }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 2)
+        .background(paper, in: Capsule())
+        .overlay { Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5) }
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(tint.opacity(0.28)).frame(width: 0.5, height: 14)
+    }
+
+    private var resizeHandle: some View {
+        NoteTool(symbol: "arrow.up.and.down", ink: ink, plate: paper, rule: tint.opacity(0.35))
+            .contentShape(Rectangle())
+            .gesture(resize)
+            .onTapGesture(count: 2) { onManual(nil) }
+            .accessibilityLabel("Resize note")
+            .accessibilityHint("Drag to change the height. Double-tap to fit the writing.")
+            .accessibilityAdjustableAction { direction in
+                if direction == .increment {
+                    onManual(height + Notes.rulePitch)
+                } else {
+                    onManual(max(pitch * 0.6, height - Notes.rulePitch))
+                }
+            }
     }
 
     private var resize: some Gesture {
@@ -287,6 +327,23 @@ struct NoteBand: View {
                 onManual(max(pitch * 0.6, (dragStart ?? height) + value.translation.height))
             }
             .onEnded { _ in dragStart = nil }
+    }
+}
+
+private struct NoteTool: View {
+    var symbol: String
+    var ink: Color
+    var plate: Color? = nil
+    var rule: Color = .clear
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(ink)
+            .frame(width: 36, height: 36)
+            .background { if let plate { Circle().fill(plate) } }
+            .overlay { Circle().strokeBorder(rule, lineWidth: plate == nil ? 0 : 0.5) }
+            .contentShape(Circle())
     }
 }
 
