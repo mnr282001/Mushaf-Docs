@@ -55,10 +55,39 @@ enum Notes {
         try? JSONEncoder().encode(layout)
     }
 
-    static func bandHeight(pitch: CGFloat, drawing: Data?, manual: Double?) -> CGFloat {
+    static let noteFont: UIFont = {
+        let base = UIFont.systemFont(ofSize: 17)
+        guard let serif = base.fontDescriptor.withDesign(.serif) else { return base }
+        return UIFont(descriptor: serif, size: 17)
+    }()
+
+    static func bandHeight(pitch: CGFloat, drawing: Data?, text: Data?, width: CGFloat, manual: Double?) -> CGFloat {
         let minimum = pitch * 0.6
-        let content = inkHeight(drawing)
+        let content = max(inkHeight(drawing), textHeight(text, width: width))
         return max(minimum, content, CGFloat(manual ?? 0))
+    }
+
+    static func textHeight(_ data: Data?, width: CGFloat) -> CGFloat {
+        guard let text = attributed(data), !text.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return 0 }
+        let bounds = text.boundingRect(with: CGSize(width: max(width - 16, 1), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+        return ceil(bounds.height) + 12
+    }
+
+    static func attributed(_ data: Data?) -> NSAttributedString? {
+        guard let data, !data.isEmpty else { return nil }
+        guard let raw = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) else { return nil }
+        let clean = NSMutableAttributedString(attributedString: raw)
+        clean.removeAttribute(.foregroundColor, range: NSRange(location: 0, length: clean.length))
+        return clean
+    }
+
+    static func rtf(_ text: NSAttributedString) -> Data? {
+        try? text.data(from: NSRange(location: 0, length: text.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+    }
+
+    static func hasText(_ data: Data?) -> Bool {
+        guard let text = attributed(data) else { return false }
+        return !text.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     static func inkHeight(_ data: Data?) -> CGFloat {
@@ -79,5 +108,9 @@ enum Notes {
         var drawing = PKDrawing()
         drawing.strokes = [PKStroke(ink: ink, path: path)]
         return drawing.dataRepresentation()
+    }
+
+    static func sampleText() -> Data? {
+        rtf(NSAttributedString(string: "Sunday class — الحمد", attributes: [.font: noteFont]))
     }
 }

@@ -95,7 +95,7 @@ struct ReaderView: View {
     private func pageFace(_ item: MushafPage, width: CGFloat, height: CGFloat) -> some View {
         Group {
             if interlinear, let notebook {
-                InterlinearPage(page: item, notebook: notebook, notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id })
+                InterlinearPage(page: item, notebook: notebook, notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id }, typeLine: Self.typeAtLaunch ? 4 : nil)
             } else {
                 MushafPageView(page: item, markedLines: marked(on: item.number), mark: markColor)
             }
@@ -118,18 +118,36 @@ struct ReaderView: View {
             if book.modelContext == nil { context.insert(book) }
             notebook = book
         }
-        guard ProcessInfo.processInfo.arguments.contains("-sample-note"),
-              let notebook,
-              !writings.contains(where: { $0.page == 1 && $0.line == 4 }) else { return }
-        let note = Annotation()
-        note.notebook = notebook
-        note.kind = "interlinear"
-        note.page = 1
-        note.line = 4
-        note.ayahStart = "1:2"
-        note.ayahEnd = "1:2"
-        note.drawing = Notes.sampleDrawing()
-        context.insert(note)
+        guard let notebook else { return }
+        let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
+        if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
+            let note = Annotation()
+            note.notebook = notebook
+            note.kind = "interlinear"
+            note.page = 1
+            note.line = 4
+            note.ayahStart = "1:2"
+            note.ayahEnd = "1:2"
+            note.drawing = Notes.sampleDrawing()
+            context.insert(note)
+        }
+        if Self.typeAtLaunch {
+            let note = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id } ?? {
+                let made = Annotation()
+                made.notebook = notebook
+                made.kind = "interlinear"
+                made.page = 1
+                made.line = 4
+                made.ayahStart = "1:2"
+                made.ayahEnd = "1:2"
+                context.insert(made)
+                return made
+            }()
+            if !Notes.hasText(note.text) {
+                note.text = Notes.sampleText()
+                note.updatedAt = Date()
+            }
+        }
     }
 
     private func pageSize(pages: Int, in available: CGSize) -> CGSize {
@@ -279,6 +297,11 @@ struct ReaderView: View {
     }
 
     private static var notesAtLaunch: Bool {
-        ProcessInfo.processInfo.arguments.contains("-notes")
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-notes") || args.contains("-type")
+    }
+
+    private static var typeAtLaunch: Bool {
+        ProcessInfo.processInfo.arguments.contains("-type")
     }
 }

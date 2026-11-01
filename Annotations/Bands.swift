@@ -6,10 +6,12 @@ struct InterlinearPage: View {
     var page: MushafPage
     var notebook: Notebook
     var notes: [Annotation]
+    var typeLine: Int? = nil
     @Environment(\.palette) private var palette
     @Environment(\.modelContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var made: [Int: Annotation] = [:]
+    @State private var keyboard: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
@@ -17,6 +19,8 @@ struct InterlinearPage: View {
             let marginY = closed * 0.055
             let pitch = (closed - marginY * 2) / CGFloat(max(page.lines.count, 1))
             let hue = (NotebookHue.all.first { $0.name == "Teal" } ?? NotebookHue.all[0]).resolved(night: palette.isNight)
+            let textWidth = geo.size.width * 0.844
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: marginY)
@@ -26,26 +30,44 @@ struct InterlinearPage: View {
                             .accessibilityLabel(line.spoken)
                         NoteBand(
                             pitch: pitch,
+                            width: textWidth,
+                            margin: geo.size.width * 0.078,
                             ink: hue.ink,
                             tint: hue.tint,
                             rule: palette.rule,
                             drawing: note(line.number)?.drawing ?? Data(),
+                            text: note(line.number)?.text ?? Data(),
                             manual: Notes.layout(of: note(line.number)?.layout).manual,
+                            startsTyping: line.number == typeLine,
                             onDrawing: { setDrawing($0, line: line) },
-                            onManual: { setManual($0, line: line) }
+                            onText: { setText($0, line: line) },
+                            onManual: { setManual($0, line: line) },
+                            onEdit: {
+                                if reduceMotion {
+                                    proxy.scrollTo(line.id, anchor: .center)
+                                } else {
+                                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(line.id, anchor: .center) }
+                                }
+                            }
                         )
-                        .padding(.horizontal, geo.size.width * 0.078)
+                        .id(line.id)
                         .transition(.opacity)
                     }
-                    Color.clear.frame(height: marginY)
+                    Color.clear.frame(height: marginY + keyboard)
                 }
+            }
             }
             .scrollIndicators(.hidden)
             .background(palette.paper)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: notes.count)
         }
-        .background(palette.paper)
-        .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
+            .background(palette.paper)
+            .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+                      let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+                keyboard = max(0, scene.screen.bounds.maxY - frame.minY)
+            }
     }
 
     private func note(_ line: Int) -> Annotation? {
@@ -86,8 +108,15 @@ struct InterlinearPage: View {
         dropIfEmpty(item, line: line.number)
     }
 
+    private func setText(_ data: Data, line: MushafLine) {
+        let item = ensure(line)
+        item.text = data
+        item.updatedAt = Date()
+        dropIfEmpty(item, line: line.number)
+    }
+
     private func dropIfEmpty(_ item: Annotation, line: Int) {
-        guard !Notes.hasInk(item.drawing), Notes.layout(of: item.layout).manual == nil else { return }
+        guard !Notes.hasInk(item.drawing), !Notes.hasText(item.text), Notes.layout(of: item.layout).manual == nil else { return }
         context.delete(item)
         made[line] = nil
     }
@@ -95,51 +124,106 @@ struct InterlinearPage: View {
 
 struct NoteBand: View {
     var pitch: CGFloat
+    var width: CGFloat
+    var margin: CGFloat
     var ink: Color
     var tint: Color
     var rule: Color
     var drawing: Data
+    var text: Data
     var manual: Double?
+    var startsTyping = false
     var onDrawing: (Data) -> Void
+    var onText: (Data) -> Void
     var onManual: (CGFloat?) -> Void
+    var onEdit: () -> Void
     @State private var dragStart: CGFloat?
+    @State private var focused = false
+    @State private var typing = false
 
-    private var height: CGFloat { Notes.bandHeight(pitch: pitch, drawing: drawing, manual: manual) }
+    private var height: CGFloat { Notes.bandHeight(pitch: pitch, drawing: drawing, text: text, width: width, manual: manual) }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: margin)
+                writing
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height)
+                Color.clear.frame(width: margin)
+            }
+            .environment(\.layoutDirection, .leftToRight)
+            HStack(spacing: 0) {
+                controls
+                    .frame(width: margin, height: height, alignment: .top)
+                Spacer(minLength: 0)
+            }
+            .environment(\.layoutDirection, .leftToRight)
+        }
+        .onAppear {
+            guard startsTyping else { return }
+            focused = true
+            typing = true
+            onEdit()
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var writing: some View {
+        ZStack(alignment: .topLeading) {
             RuledLines(spacing: Notes.rulePitch, color: rule)
-            BandCanvas(drawingData: drawing, ink: ink.uiColor, onChange: onDrawing)
+            BandCanvas(drawingData: drawing, ink: ink.uiColor, acceptsPencil: !typing, onChange: onDrawing, onBegin: {
+                focused = true
+                typing = false
+            })
+            BandText(textData: text, ink: ink.uiColor, typing: typing, onChange: onText)
             Rectangle().fill(tint).frame(width: 1)
+        }
+        .environment(\.layoutDirection, .rightToLeft)
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+    }
+
+    private var controls: some View {
+        ZStack(alignment: .top) {
             VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        onManual(height + Notes.rulePitch)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(MushafType.ui)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(ink)
-                    .accessibilityLabel("Add a ruled line")
-                }
-                Spacer()
+                Spacer(minLength: 0)
                 Capsule()
                     .fill(tint.opacity(0.7))
-                    .frame(width: 36, height: 5)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(width: 28, height: 5)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
                     .gesture(resize)
                     .onTapGesture(count: 2) { onManual(nil) }
                     .accessibilityLabel("Resize note")
                     .accessibilityHint("Drag to make the band taller. Double-tap to fit the writing.")
             }
+            VStack(spacing: 0) {
+                if focused {
+                    Button {
+                        typing.toggle()
+                        if typing { onEdit() }
+                    } label: {
+                        Image(systemName: typing ? "pencil.tip" : "keyboard")
+                            .font(MushafType.ui)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(ink)
+                    .accessibilityLabel(typing ? "Pen" : "Keyboard")
+                }
+                Button {
+                    onManual(height + Notes.rulePitch)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(MushafType.ui)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(ink)
+                .accessibilityLabel("Add a ruled line")
+            }
         }
-        .frame(height: height)
-        .accessibilityElement(children: .contain)
     }
 
     private var resize: some Gesture {
@@ -173,9 +257,11 @@ private struct RuledLines: View {
 private struct BandCanvas: UIViewRepresentable {
     var drawingData: Data
     var ink: UIColor
+    var acceptsPencil: Bool
     var onChange: (Data) -> Void
+    var onBegin: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange, onBegin: onBegin) }
 
     func makeUIView(context: Context) -> PKCanvasView {
         let canvas = PKCanvasView()
@@ -191,9 +277,72 @@ private struct BandCanvas: UIViewRepresentable {
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
         context.coordinator.onChange = onChange
+        context.coordinator.onBegin = onBegin
+        canvas.isUserInteractionEnabled = acceptsPencil
         let current = canvas.drawing.dataRepresentation()
         guard current != drawingData else { return }
         canvas.drawing = (try? PKDrawing(data: drawingData)) ?? PKDrawing()
+    }
+}
+
+private struct BandText: UIViewRepresentable {
+    var textData: Data
+    var ink: UIColor
+    var typing: Bool
+    var onChange: (Data) -> Void
+
+    func makeCoordinator() -> TextCoordinator { TextCoordinator(onChange: onChange) }
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.isScrollEnabled = false
+        view.textAlignment = .natural
+        view.font = Notes.noteFont
+        view.textColor = ink
+        view.textContainerInset = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 36)
+        view.delegate = context.coordinator
+        view.attributedText = Notes.attributed(textData) ?? NSAttributedString(string: "")
+        view.font = Notes.noteFont
+        view.textColor = ink
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.onChange = onChange
+        let wasTyping = context.coordinator.typing
+        context.coordinator.typing = typing
+        view.isEditable = typing
+        view.isUserInteractionEnabled = typing
+        view.textColor = ink
+        if !context.coordinator.editing {
+            let next = Notes.attributed(textData) ?? NSAttributedString(string: "")
+            if view.attributedText.string != next.string {
+                view.attributedText = next
+                view.font = Notes.noteFont
+                view.textColor = ink
+            }
+        }
+        if typing, !wasTyping { view.becomeFirstResponder() }
+        if !typing, wasTyping { view.resignFirstResponder() }
+    }
+}
+
+private final class TextCoordinator: NSObject, UITextViewDelegate {
+    var onChange: (Data) -> Void
+    var typing = false
+    var editing = false
+    init(onChange: @escaping (Data) -> Void) { self.onChange = onChange }
+
+    func textViewDidChange(_ textView: UITextView) {
+        editing = true
+        let data = Notes.rtf(textView.attributedText ?? NSAttributedString(string: "")) ?? Data()
+        let change = onChange
+        Task { @MainActor in
+            change(data)
+            editing = false
+        }
     }
 }
 
@@ -204,11 +353,20 @@ private enum PencilShelf {
 
 private final class Coordinator: NSObject, PKCanvasViewDelegate {
     var onChange: (Data) -> Void
-    init(onChange: @escaping (Data) -> Void) { self.onChange = onChange }
+    var onBegin: () -> Void
+    init(onChange: @escaping (Data) -> Void, onBegin: @escaping () -> Void) {
+        self.onChange = onChange
+        self.onBegin = onBegin
+    }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         let data = canvasView.drawing.dataRepresentation()
         let change = onChange
         Task { @MainActor in change(data) }
+    }
+
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        let begin = onBegin
+        Task { @MainActor in begin() }
     }
 }
