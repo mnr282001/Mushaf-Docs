@@ -22,13 +22,16 @@ struct ReaderView: View {
     @State private var interlinear = ReaderView.notesAtLaunch
     @State private var sidebar = ProcessInfo.processInfo.arguments.contains("-sidebar")
     @State private var stickiesOn = ProcessInfo.processInfo.arguments.contains("-sticky")
+    @State private var highlightsOn = true
+    @State private var appliedPresetFor: UUID?
     @State private var madeStickies: [Annotation] = []
     @State private var madeUnknown: [Annotation] = []
     @State private var wordMenu: MushafWord?
     @State private var wordMenuPage = 1
     @State private var wordMenuExpanded = false
     @State private var madeSidebar: [Annotation] = []
-    @State private var chrome = false
+    @State private var chrome = ProcessInfo.processInfo.arguments.contains("-layers")
+    @State private var showLayers = false
     @State private var showSurahs = ProcessInfo.processInfo.arguments.contains("-find")
     @State private var showNotebooks = ProcessInfo.processInfo.arguments.contains("-notebooks")
     @State private var findQuery = ReaderView.findAtLaunch
@@ -110,7 +113,13 @@ struct ReaderView: View {
         }
         .sheet(isPresented: $showJuz) { juzSheet }
         .sheet(isPresented: $showTokens) { TokenPreview() }
-        .task { prepareNotes() }
+        .task {
+            prepareNotes()
+            if ProcessInfo.processInfo.arguments.contains("-layers") {
+                try? await Task.sleep(for: .milliseconds(400))
+                showLayers = true
+            }
+        }
     }
 
     private func spread(_ index: Int, landscape: Bool, in size: CGSize) -> some View {
@@ -230,6 +239,7 @@ struct ReaderView: View {
     }
 
     private func wordWashes(on page: Int) -> [WordWash] {
+        guard highlightsOn else { return [] }
         let visible = Set(NotebookSession.ids(visibleNotebookIDs))
         return highlights.compactMap { note in
             guard note.page == page, let wordID = note.wordStart, let book = note.notebook, visible.contains(book.id) else { return nil }
@@ -295,6 +305,7 @@ struct ReaderView: View {
         note.wordStart = wordID
         note.wordEnd = wordID
         context.insert(note)
+        highlightsOn = true
     }
 
     private func marginMarks(on page: Int) -> [PageMark] {
@@ -337,6 +348,16 @@ struct ReaderView: View {
             wordMenu = word
             wordMenuPage = 1
             wordMenuExpanded = true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-preset") {
+            sidebar = true
+            stickiesOn = false
+            interlinear = false
+            highlightsOn = true
+            savePreset()
+            appliedPresetFor = notebook.id
+        } else {
+            applyPreset(notebook)
         }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
@@ -464,6 +485,21 @@ struct ReaderView: View {
                     .frame(width: 44, height: 44)
             }
             .accessibilityLabel(interlinear ? "Close interlinear notes" : "Interlinear notes")
+            Button { showLayers = true } label: {
+                Image(systemName: "square.3.layers.3d")
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Layers")
+            .popover(isPresented: $showLayers, arrowEdge: .top) {
+                LayerToggles(
+                    interlinear: $interlinear,
+                    sidebar: $sidebar,
+                    stickies: $stickiesOn,
+                    highlights: $highlightsOn,
+                    backup: noteBackup(),
+                    onSave: savePreset
+                )
+            }
             Menu {
                 ForEach(MushafTheme.allCases) { item in
                     Button(item.title) { themeRaw = item.rawValue }
@@ -648,6 +684,39 @@ struct ReaderView: View {
         var visible = NotebookSession.ids(visibleNotebookIDs).filter { $0 != book.id }
         visible.insert(book.id, at: 0)
         visibleNotebookIDs = NotebookSession.raw(Array(visible.prefix(3)))
+        applyPreset(book, force: true)
+    }
+
+    private func applyPreset(_ book: Notebook, force: Bool = false) {
+        if !force {
+            guard appliedPresetFor != book.id else { return }
+        }
+        appliedPresetFor = book.id
+        guard !Self.launchOverridesLayers else { return }
+        guard let preset = ViewPreset.decode(book.viewPreset) else { return }
+        interlinear = preset.interlinear
+        sidebar = preset.sidebar
+        stickiesOn = preset.stickies
+        highlightsOn = preset.highlights
+    }
+
+    private func savePreset() {
+        guard let notebook else { return }
+        notebook.viewPreset = ViewPreset(interlinear: interlinear, sidebar: sidebar, stickies: stickiesOn, highlights: highlightsOn).data
+    }
+
+    private func noteBackup() -> Data {
+        struct Row: Codable {
+            var kind: String
+            var page: Int
+            var line: Int?
+            var text: String?
+            var recognized: String?
+        }
+        let rows = (writings + sideNotes + stickies + definitions + highlights + otherNotes)
+            .filter { $0.notebook?.id == notebook?.id }
+            .map { Row(kind: $0.kind, page: $0.page, line: $0.line, text: Notes.attributed($0.text)?.string, recognized: $0.recognizedText) }
+        return (try? JSONEncoder().encode(rows)) ?? Data()
     }
 
     private func addSidebar(_ line: Int, on page: MushafPage) {
@@ -847,6 +916,11 @@ struct ReaderView: View {
 
     private static var typeAtLaunch: Bool {
         ProcessInfo.processInfo.arguments.contains("-type")
+    }
+
+    private static var launchOverridesLayers: Bool {
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-notes") || args.contains("-type") || args.contains("-sidebar") || args.contains("-sticky") || args.contains("-preset")
     }
 
     private static var findAtLaunch: String {
