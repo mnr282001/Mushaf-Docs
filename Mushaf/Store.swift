@@ -54,7 +54,7 @@ struct SurahInfo: Identifiable, Hashable {
 }
 
 struct FindHit: Identifiable, Hashable {
-    enum Kind: String { case page = "Page", surah = "Surah", ayah = "Ayah" }
+    enum Kind: String { case page = "Page", surah = "Surah", ayah = "Ayah", note = "Note" }
     var id: String
     var kind: Kind
     var title: String

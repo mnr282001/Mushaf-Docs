@@ -25,9 +25,9 @@ struct ReaderView: View {
     @State private var madeUnknown: [Annotation] = []
     @State private var madeSidebar: [Annotation] = []
     @State private var chrome = false
-    @State private var showSurahs = false
+    @State private var showSurahs = ProcessInfo.processInfo.arguments.contains("-find")
     @State private var showNotebooks = ProcessInfo.processInfo.arguments.contains("-notebooks")
-    @State private var findQuery = ""
+    @State private var findQuery = ReaderView.findAtLaunch
     @State private var showJuz = false
     @State private var showTokens = false
     @State private var scrubbing = false
@@ -264,6 +264,7 @@ struct ReaderView: View {
         if ProcessInfo.processInfo.arguments.contains("-sidebar") { seedSidebar() }
         if ProcessInfo.processInfo.arguments.contains("-sticky") { seedSticky() }
         if ProcessInfo.processInfo.arguments.contains("-unknown") { seedUnknown() }
+        if ProcessInfo.processInfo.arguments.contains("-ocr") { Task { await seedOCR() } }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -436,7 +437,7 @@ struct ReaderView: View {
     }
 
     private var findField: some View {
-        TextField("Surah, page, or 2:255", text: $findQuery)
+        TextField("Surah, page, note, or 2:255", text: $findQuery)
             .font(MushafType.ui)
             .foregroundStyle(palette.uiInk)
             .padding(.horizontal, 12)
@@ -449,7 +450,7 @@ struct ReaderView: View {
             .textInputAutocapitalization(.never)
             .submitLabel(.go)
             .onSubmit {
-                if let hit = store.search(findQuery).first { open(hit.page) }
+                if let hit = findHits.first { open(hit.page) }
             }
     }
 
@@ -479,7 +480,7 @@ struct ReaderView: View {
     }
 
     private var surahSheet: some View {
-        let hits = store.search(findQuery)
+        let hits = findHits
         return NavigationStack {
             VStack(spacing: 0) {
                 findField
@@ -518,6 +519,42 @@ struct ReaderView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private var findHits: [FindHit] {
+        store.search(findQuery) + noteHits(findQuery)
+    }
+
+    private func noteHits(_ raw: String) -> [FindHit] {
+        let needle = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard needle.count >= 2 else { return [] }
+        let visible = Set(NotebookSession.ids(visibleNotebookIDs))
+        return (writings + sideNotes + stickies + otherNotes).compactMap { note -> FindHit? in
+            guard let book = note.notebook, visible.contains(book.id) else { return nil }
+            let typed = Notes.attributed(note.text)?.string ?? ""
+            let ink = note.recognizedText ?? ""
+            let blob = "\(typed) \(ink)".lowercased()
+            guard blob.contains(needle) else { return nil }
+            let title = (typed.isEmpty ? ink : typed).trimmingCharacters(in: .whitespacesAndNewlines)
+            return FindHit(id: "note-\(note.id.uuidString)", kind: .note, title: String(title.prefix(80)), detail: book.title, page: note.page)
+        }
+    }
+
+    private func seedOCR() async {
+        guard let notebook else { return }
+        let text = await InkText.recognize(InkText.proofImage("margin ink"))
+        guard !text.isEmpty else { return }
+        if let existing = (writings + otherNotes).first(where: { $0.page == 50 && $0.line == 8 && $0.notebook?.id == notebook.id }) {
+            existing.recognizedText = text
+            return
+        }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "interlinear"
+        note.page = 50
+        note.line = 8
+        note.recognizedText = text
+        context.insert(note)
     }
 
     private func open(_ destination: Int) {
@@ -737,5 +774,11 @@ struct ReaderView: View {
 
     private static var typeAtLaunch: Bool {
         ProcessInfo.processInfo.arguments.contains("-type")
+    }
+
+    private static var findAtLaunch: String {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-find"), index + 1 < args.count else { return "" }
+        return args[index + 1]
     }
 }

@@ -189,6 +189,8 @@ struct InterlinearPage: View {
         item.drawing = data
         item.updatedAt = Date()
         dropIfEmpty(item, line: line.number)
+        guard item.modelContext != nil else { return }
+        InkText.schedule(item)
     }
 
     private func setManual(_ manual: CGFloat?, line: MushafLine) {
