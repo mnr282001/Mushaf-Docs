@@ -65,12 +65,8 @@ struct ReaderView: View {
                 if chrome {
                     VStack(spacing: 0) {
                         topBar(landscape)
-                        findField
-                        if !findQueryTrimmed.isEmpty {
-                            findResults(store.search(findQuery))
-                        }
                         Spacer()
-                        if findQueryTrimmed.isEmpty { scrubber }
+                        scrubber
                     }
                     .transition(.opacity)
                 }
@@ -219,6 +215,10 @@ struct ReaderView: View {
             Text("·").foregroundStyle(palette.uiSecondary)
             Text(label).font(MushafType.ui.monospacedDigit()).layoutPriority(1)
             Spacer(minLength: 8)
+            Button { showSurahs = true } label: {
+                Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Find")
             Button { showNotebooks = true } label: {
                 Image(systemName: "book.closed").frame(width: 44, height: 44)
             }
@@ -292,27 +292,6 @@ struct ReaderView: View {
             .onSubmit {
                 if let hit = store.search(findQuery).first { open(hit.page) }
             }
-    }
-
-    private func findResults(_ hits: [FindHit]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if hits.isEmpty {
-                    Text("No match")
-                        .font(MushafType.ui)
-                        .foregroundStyle(palette.uiSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                } else {
-                    ForEach(hits) { hit in
-                        Button { open(hit.page) } label: { findLabel(hit) }
-                    }
-                }
-            }
-        }
-        .frame(maxHeight: 280)
-        .background(palette.paper)
     }
 
     private func findLabel(_ hit: FindHit) -> some View {
