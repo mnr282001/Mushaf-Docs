@@ -119,6 +119,10 @@ struct ReaderView: View {
                 try? await Task.sleep(for: .milliseconds(400))
                 showLayers = true
             }
+            if ProcessInfo.processInfo.arguments.contains("-pdf") {
+                let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Mushaf.pdf")
+                try? notePDF().write(to: url)
+            }
         }
     }
 
@@ -497,6 +501,7 @@ struct ReaderView: View {
                     stickies: $stickiesOn,
                     highlights: $highlightsOn,
                     backup: noteBackup(),
+                    pdf: notePDF(),
                     onSave: savePreset
                 )
             }
@@ -717,6 +722,13 @@ struct ReaderView: View {
             .filter { $0.notebook?.id == notebook?.id }
             .map { Row(kind: $0.kind, page: $0.page, line: $0.line, text: Notes.attributed($0.text)?.string, recognized: $0.recognizedText) }
         return (try? JSONEncoder().encode(rows)) ?? Data()
+    }
+
+    private func notePDF() -> Data {
+        let notes = (writings + sideNotes + stickies + definitions + highlights + otherNotes)
+            .filter { $0.notebook?.id == notebook?.id }
+        let pages = Set(notes.map(\.page)).sorted().prefix(24).compactMap { store.page($0) }
+        return PageExport.pdf(pages: pages, notes: notes, palette: palette)
     }
 
     private func addSidebar(_ line: Int, on page: MushafPage) {

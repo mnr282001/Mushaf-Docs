@@ -32,6 +32,7 @@ struct LayerToggles: View {
     @Binding var stickies: Bool
     @Binding var highlights: Bool
     var backup: Data
+    var pdf: Data
     var onSave: () -> Void
     @Environment(\.palette) private var palette
 
@@ -49,6 +50,12 @@ struct LayerToggles: View {
             .foregroundStyle(palette.accent)
             ShareLink(item: NoteBackup(data: backup), preview: SharePreview("Notes")) {
                 Text("Export notes")
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(palette.uiInk)
+            ShareLink(item: NotePDF(data: pdf), preview: SharePreview("Pages")) {
+                Text("Export PDF")
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }
             .buttonStyle(.plain)
