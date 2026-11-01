@@ -11,8 +11,8 @@ struct FingerPager: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIViewController(context: Context) -> UIPageViewController {
-        let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
+    func makeUIViewController(context: Context) -> MushafPager {
+        let pager = MushafPager(transitionStyle: .scroll, navigationOrientation: .horizontal)
         pager.dataSource = context.coordinator
         pager.delegate = context.coordinator
         pager.view.backgroundColor = .clear
@@ -20,7 +20,7 @@ struct FingerPager: UIViewControllerRepresentable {
         return pager
     }
 
-    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
+    func updateUIViewController(_ pager: MushafPager, context: Context) {
         context.coordinator.bind(pager, parent: self)
     }
 
@@ -95,6 +95,21 @@ struct FingerPager: UIViewControllerRepresentable {
     }
 }
 
+final class MushafPager: UIPageViewController {
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var childForHomeIndicatorAutoHidden: UIViewController? { nil }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .bottom }
+    override var childForScreenEdgesDeferringSystemGestures: UIViewController? { nil }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+    }
+}
+
 final class PageHost: UIHostingController<AnyView> {
     var index = 0
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .bottom }
 }
