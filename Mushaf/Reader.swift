@@ -14,6 +14,7 @@ struct ReaderView: View {
     @Query(filter: #Predicate<Annotation> { $0.kind == "highlight" }) private var highlights: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "sidebar" }) private var sideNotes: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "sticky" }) private var stickies: [Annotation]
+    @Query(filter: #Predicate<Annotation> { $0.kind == "dictionary" }) private var definitions: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind != "interlinear" && $0.kind != "sidebar" && $0.kind != "sticky" && $0.kind != "highlight" }) private var otherNotes: [Annotation]
     @State private var store = MushafStore()
     @State private var notebook: Notebook?
@@ -23,6 +24,9 @@ struct ReaderView: View {
     @State private var stickiesOn = ProcessInfo.processInfo.arguments.contains("-sticky")
     @State private var madeStickies: [Annotation] = []
     @State private var madeUnknown: [Annotation] = []
+    @State private var wordMenu: MushafWord?
+    @State private var wordMenuPage = 1
+    @State private var wordMenuExpanded = false
     @State private var madeSidebar: [Annotation] = []
     @State private var chrome = false
     @State private var showSurahs = ProcessInfo.processInfo.arguments.contains("-find")
@@ -160,6 +164,30 @@ struct ReaderView: View {
                         .frame(width: fitted.width, height: fitted.height)
                         .environment(\.layoutDirection, .leftToRight)
                     }
+                    if item.number == wordMenuPage, let word = wordMenu, let gloss = store.gloss(word) {
+                        DictionaryCard(
+                            gloss: gloss,
+                            expanded: wordMenuExpanded,
+                            definition: savedDefinition(for: word),
+                            paper: palette.paper,
+                            ink: palette.uiInk,
+                            secondary: palette.uiSecondary,
+                            accent: palette.accent,
+                            pageSize: fitted,
+                            room: max(48, (size.width - (landscape ? 32 : 56) - fitted.width) / 2),
+                            onExpand: { wordMenuExpanded.toggle() },
+                            onHighlight: { toggleHighlight(word.id, on: item) },
+                            onNote: { addSidebar(item.lines.first { $0.words.contains { $0.id == word.id } }?.number ?? 1, on: item); sidebar = true },
+                            onPage: { destination in
+                                page = destination
+                                wordMenu = nil
+                            },
+                            onDefinition: { saveDefinition($0, word: word, page: item.number) },
+                            onClose: { wordMenu = nil }
+                        )
+                        .frame(width: fitted.width, height: fitted.height)
+                        .environment(\.layoutDirection, .leftToRight)
+                    }
                 }
                 .frame(width: fitted.width, height: fitted.height)
             }
@@ -182,11 +210,11 @@ struct ReaderView: View {
                     others: readLayers(on: item.number),
                     onSwitch: { activate($0) },
                     washes: wordWashes(on: item.number),
-                    onWord: { toggleHighlight($0, on: item) },
+                    onWord: { openWord($0, on: item) },
                     typeLine: Self.typeAtLaunch ? 4 : nil
                 )
             } else {
-                MushafPageView(page: item, marks: marginMarks(on: item.number), washes: wordWashes(on: item.number), onWord: { toggleHighlight($0, on: item) })
+                MushafPageView(page: item, marks: marginMarks(on: item.number), washes: wordWashes(on: item.number), onWord: { openWord($0, on: item) })
             }
         }
         .frame(width: width, height: height)
@@ -208,6 +236,44 @@ struct ReaderView: View {
             let hue = NotebookSession.hue(hex: book.colorHex).resolved(night: palette.isNight)
             return WordWash(wordID: wordID, color: hue.wash.uiColor.withAlphaComponent(hue.washOpacity))
         }
+    }
+
+    private func openWord(_ wordID: Int, on page: MushafPage) {
+        guard let word = page.lines.flatMap(\.words).first(where: { $0.id == wordID }), word.kind == "word" else { return }
+        wordMenu = word
+        wordMenuPage = page.number
+        wordMenuExpanded = false
+    }
+
+    private func savedDefinition(for word: MushafWord) -> String {
+        let data = definitions.first { $0.wordStart == word.id && $0.notebook?.id == notebook?.id }?.text
+        return Notes.attributed(data)?.string ?? ""
+    }
+
+    private func saveDefinition(_ text: String, word: MushafWord, page: Int) {
+        prepareNotes()
+        guard let notebook else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = definitions.first(where: { $0.wordStart == word.id && $0.notebook?.id == notebook.id }) {
+            if trimmed.isEmpty {
+                context.delete(existing)
+            } else {
+                existing.text = Notes.rtf(NSAttributedString(string: text, attributes: [.font: Notes.noteFont]))
+                existing.updatedAt = Date()
+            }
+            return
+        }
+        guard !trimmed.isEmpty else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "dictionary"
+        note.page = page
+        note.wordStart = word.id
+        note.wordEnd = word.id
+        note.ayahStart = "\(word.surah):\(word.ayah)"
+        note.ayahEnd = note.ayahStart
+        note.text = Notes.rtf(NSAttributedString(string: text, attributes: [.font: Notes.noteFont]))
+        context.insert(note)
     }
 
     private func toggleHighlight(_ wordID: Int, on page: MushafPage) {
@@ -265,6 +331,13 @@ struct ReaderView: View {
         if ProcessInfo.processInfo.arguments.contains("-sticky") { seedSticky() }
         if ProcessInfo.processInfo.arguments.contains("-unknown") { seedUnknown() }
         if ProcessInfo.processInfo.arguments.contains("-ocr") { Task { await seedOCR() } }
+        if ProcessInfo.processInfo.arguments.contains("-dictionary"), wordMenu == nil,
+           let item = store.page(1),
+           let word = item.lines.flatMap(\.words).first(where: { $0.kind == "word" }) {
+            wordMenu = word
+            wordMenuPage = 1
+            wordMenuExpanded = true
+        }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -529,7 +602,7 @@ struct ReaderView: View {
         let needle = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard needle.count >= 2 else { return [] }
         let visible = Set(NotebookSession.ids(visibleNotebookIDs))
-        return (writings + sideNotes + stickies + otherNotes).compactMap { note -> FindHit? in
+        return (writings + sideNotes + stickies + definitions + otherNotes).compactMap { note -> FindHit? in
             guard let book = note.notebook, visible.contains(book.id) else { return nil }
             let typed = Notes.attributed(note.text)?.string ?? ""
             let ink = note.recognizedText ?? ""

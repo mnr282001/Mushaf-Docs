@@ -21,6 +21,7 @@ enum AnnotationRegistry {
         KindSpec(id: "sidebar", displayName: "Sidebar", anchors: [.line, .ayah], placement: .margin),
         KindSpec(id: "sticky", displayName: "Sticky", anchors: [.page], placement: .floating),
         KindSpec(id: "highlight", displayName: "Highlight", anchors: [.word], placement: .overlay),
+        KindSpec(id: "dictionary", displayName: "Dictionary", anchors: [.word], placement: .popover),
     ]
 
     static func spec(for id: String) -> KindSpec? {

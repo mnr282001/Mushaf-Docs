@@ -53,6 +53,18 @@ struct SurahInfo: Identifiable, Hashable {
     var page: Int
 }
 
+struct WordGloss: Identifiable, Hashable {
+    var wordID: Int
+    var arabic: String
+    var gloss: String
+    var translit: String
+    var root: String
+    var lemma: String
+    var frequency: Int
+    var pages: [Int]
+    var id: Int { wordID }
+}
+
 struct FindHit: Identifiable, Hashable {
     enum Kind: String { case page = "Page", surah = "Surah", ayah = "Ayah", note = "Note" }
     var id: String
@@ -136,6 +148,32 @@ final class MushafStore {
 
     func surahName(on page: Int) -> String {
         self.page(page)?.surahName ?? ""
+    }
+
+    func gloss(_ word: MushafWord) -> WordGloss? {
+        guard word.kind == "word", let db else { return nil }
+        var gloss = ""
+        var translit = ""
+        var root = ""
+        var lemma = ""
+        var frequency = 0
+        var lemmaID = 0
+        Self.scan(db, "SELECT w.gloss, w.translit, w.root, IFNULL(l.text, ''), IFNULL(l.freq, 0), IFNULL(w.lemma_id, 0) FROM src_word w LEFT JOIN src_lemma l ON l.id = w.lemma_id WHERE w.surah = ? AND w.ayah = ? AND w.pos = ?", binds: [word.surah, word.ayah, word.pos]) { stmt in
+            gloss = Self.column(stmt, 0)
+            translit = Self.column(stmt, 1)
+            root = Self.column(stmt, 2)
+            lemma = Self.column(stmt, 3)
+            frequency = Int(sqlite3_column_int(stmt, 4))
+            lemmaID = Int(sqlite3_column_int(stmt, 5))
+        }
+        guard !gloss.isEmpty else { return nil }
+        var pages: [Int] = []
+        if lemmaID != 0 {
+            Self.scan(db, "SELECT DISTINCT mw.page FROM src_word s JOIN word mw ON mw.surah = s.surah AND mw.ayah = s.ayah AND mw.pos = s.pos WHERE s.lemma_id = ? ORDER BY mw.page LIMIT 8", binds: [lemmaID]) { stmt in
+                pages.append(Int(sqlite3_column_int(stmt, 0)))
+            }
+        }
+        return WordGloss(wordID: word.id, arabic: word.text, gloss: gloss, translit: translit, root: root, lemma: lemma, frequency: frequency, pages: pages)
     }
 
     /// Empty query returns nothing; the sheet shows the full surah list instead.
@@ -269,11 +307,16 @@ final class MushafStore {
         return found
     }
 
-    private static func scan(_ db: OpaquePointer?, _ sql: String, _ page: Int? = nil, _ body: (OpaquePointer) -> Void) {
+    private static func scan(_ db: OpaquePointer?, _ sql: String, _ page: Int? = nil, binds: [Int] = [], _ body: (OpaquePointer) -> Void) {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return }
         defer { sqlite3_finalize(stmt) }
         if let page { sqlite3_bind_int(stmt, 1, Int32(page)) }
+        if page == nil {
+            for (index, value) in binds.enumerated() {
+                sqlite3_bind_int(stmt, Int32(index + 1), Int32(value))
+            }
+        }
         while sqlite3_step(stmt) == SQLITE_ROW { body(stmt) }
     }
 
