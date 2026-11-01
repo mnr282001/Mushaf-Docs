@@ -12,10 +12,13 @@ struct ReaderView: View {
     @AppStorage(NotebookSession.archived) private var archivedNotebookIDs = ""
     @Query(filter: #Predicate<Annotation> { $0.kind == "interlinear" }) private var writings: [Annotation]
     @Query(filter: #Predicate<Annotation> { $0.kind == "highlight" }) private var highlights: [Annotation]
+    @Query(filter: #Predicate<Annotation> { $0.kind == "sidebar" }) private var sideNotes: [Annotation]
     @State private var store = MushafStore()
     @State private var notebook: Notebook?
     @State private var page = ReaderView.initialPage
     @State private var interlinear = ReaderView.notesAtLaunch
+    @State private var sidebar = ProcessInfo.processInfo.arguments.contains("-sidebar")
+    @State private var madeSidebar: [Annotation] = []
     @State private var chrome = false
     @State private var showSurahs = false
     @State private var showNotebooks = ProcessInfo.processInfo.arguments.contains("-notebooks")
@@ -52,11 +55,11 @@ struct ReaderView: View {
                 palette.desk.ignoresSafeArea()
                 FingerPager(
                     index: pagerIndex(landscape),
-                    count: landscape ? 302 : 604,
+                    count: landscape && !sidebar ? 302 : 604,
                     reduceMotion: reduceMotion,
                     page: { index in AnyView(spread(index, landscape: landscape, in: geo.size)) },
                     onIndex: { index in
-                        page = landscape ? index * 2 + 1 : index + 1
+                        page = landscape && !sidebar ? index * 2 + 1 : index + 1
                         if !scrubbing { scrub = Double(page) }
                     },
                     onTap: { chrome.toggle() }
@@ -74,6 +77,7 @@ struct ReaderView: View {
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: chrome)
             .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: interlinear)
+            .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.45, dampingFraction: 0.85), value: sidebar)
         }
         .onChange(of: page) { _, new in
             if !screenshotLocked {
@@ -101,12 +105,24 @@ struct ReaderView: View {
     }
 
     private func spread(_ index: Int, landscape: Bool, in size: CGSize) -> some View {
-        let numbers = landscape ? [index * 2 + 1, index * 2 + 2] : [index + 1]
+        let single = !landscape || sidebar
+        let numbers = single ? [index + 1] : [index * 2 + 1, index * 2 + 2]
         let pages = numbers.compactMap { store.page($0) }
-        let fitted = pageSize(pages: pages.count, in: CGSize(width: size.width - (landscape ? 32 : 56), height: size.height - 152))
-        return HStack(spacing: 18) {
+        let column = sidebar ? min(280, max(200, size.width * 0.26)) : 0
+        let sideGap: CGFloat = sidebar ? 12 : 0
+        let fitted = pageSize(pages: pages.count, in: CGSize(width: size.width - (landscape ? 32 : 56) - column - sideGap, height: size.height - 152))
+        let onRight = sidebar && landscape && (pages.first?.number ?? 1) % 2 == 1
+        return HStack(spacing: sidebar ? sideGap : 18) {
+            if sidebar, onRight, let item = pages.first {
+                sidebarColumn(item, height: fitted.height, leadsRight: false)
+                    .frame(width: column, height: fitted.height)
+            }
             ForEach(pages) { item in
                 pageFace(item, width: fitted.width, height: fitted.height)
+            }
+            if sidebar, !onRight, let item = pages.first {
+                sidebarColumn(item, height: fitted.height, leadsRight: true)
+                    .frame(width: column, height: fitted.height)
             }
         }
         .environment(\.layoutDirection, .rightToLeft)
@@ -202,6 +218,7 @@ struct ReaderView: View {
         guard let notebook else { return }
         if ProcessInfo.processInfo.arguments.contains("-notebooks") { seedClassNotebook() }
         if ProcessInfo.processInfo.arguments.contains("-highlight") { seedHighlight() }
+        if ProcessInfo.processInfo.arguments.contains("-sidebar") { seedSidebar() }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -246,12 +263,38 @@ struct ReaderView: View {
     }
 
     private func pagerIndex(_ landscape: Bool) -> Int {
-        landscape ? (page - 1) / 2 : page - 1
+        landscape && !sidebar ? (page - 1) / 2 : page - 1
+    }
+
+    private func sidebarColumn(_ item: MushafPage, height: CGFloat, leadsRight: Bool) -> some View {
+        let hue = NotebookSession.hue(hex: notebook?.colorHex ?? "#2E7D6B").resolved(night: palette.isNight)
+        let mine = sidebarPool.filter { $0.page == item.number && $0.notebook?.id == notebook?.id }
+        let visible = Set(NotebookSession.ids(visibleNotebookIDs))
+        let others = sidebarPool.filter { $0.page == item.number && $0.notebook?.id != notebook?.id && visible.contains($0.notebook?.id ?? UUID()) }
+        return SidebarColumn(
+            page: item,
+            notes: mine,
+            readOnly: others,
+            hue: hue,
+            paper: palette.paper,
+            rule: palette.rule,
+            ink: palette.uiInk,
+            secondary: palette.uiSecondary,
+            leadsRight: leadsRight,
+            onAdd: { addSidebar($0, on: item) },
+            onText: { note, data in
+                note.text = data
+                note.updatedAt = Date()
+            },
+            onDelete: { context.delete($0) }
+        )
+        .frame(height: height)
     }
 
     private func topBar(_ landscape: Bool) -> some View {
-        let right = landscape ? ((page - 1) / 2) * 2 + 1 : page
-        let label = landscape ? "\(right)–\(min(604, right + 1))" : "\(page)"
+        let paired = landscape && !sidebar
+        let right = paired ? ((page - 1) / 2) * 2 + 1 : page
+        let label = paired ? "\(right)–\(min(604, right + 1))" : "\(page)"
         let name = store.page(right)?.surahName ?? ""
         let juz = store.page(right)?.juz ?? 1
         return HStack(spacing: 8) {
@@ -273,6 +316,15 @@ struct ReaderView: View {
                 Image(systemName: "book.closed").frame(width: 44, height: 44)
             }
             .accessibilityLabel("Notebooks")
+            Button {
+                prepareNotes()
+                sidebar.toggle()
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(sidebar ? palette.accent : palette.uiInk)
+            }
+            .accessibilityLabel(sidebar ? "Hide sidebar" : "Sidebar")
             Button {
                 prepareNotes()
                 interlinear.toggle()
@@ -429,6 +481,42 @@ struct ReaderView: View {
         var visible = NotebookSession.ids(visibleNotebookIDs).filter { $0 != book.id }
         visible.insert(book.id, at: 0)
         visibleNotebookIDs = NotebookSession.raw(Array(visible.prefix(3)))
+    }
+
+    private func addSidebar(_ line: Int, on page: MushafPage) {
+        prepareNotes()
+        guard let notebook else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "sidebar"
+        note.page = page.number
+        note.line = line
+        if let first = page.lines.first(where: { $0.number == line })?.words.first,
+           let last = page.lines.first(where: { $0.number == line })?.words.last {
+            note.ayahStart = "\(first.surah):\(first.ayah)"
+            note.ayahEnd = "\(last.surah):\(last.ayah)"
+        }
+        context.insert(note)
+        madeSidebar.append(note)
+    }
+
+    private var sidebarPool: [Annotation] {
+        var seen = Set<UUID>()
+        return (sideNotes + madeSidebar).filter { seen.insert($0.id).inserted }
+    }
+
+    private func seedSidebar() {
+        guard let notebook, !sideNotes.contains(where: { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }) else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "sidebar"
+        note.page = 1
+        note.line = 4
+        note.ayahStart = "1:4"
+        note.ayahEnd = "1:4"
+        note.text = Notes.sampleText()
+        context.insert(note)
+        madeSidebar.append(note)
     }
 
     private func seedHighlight() {
