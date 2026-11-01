@@ -21,6 +21,8 @@ struct InterlinearPage: View {
     var notes: [Annotation]
     var others: [ReadLayer] = []
     var onSwitch: (Notebook) -> Void = { _ in }
+    var washes: [WordWash] = []
+    var onWord: (Int) -> Void = { _ in }
     var typeLine: Int? = nil
     @Environment(\.palette) private var palette
     @Environment(\.modelContext) private var context
@@ -42,7 +44,7 @@ struct InterlinearPage: View {
                     Color.clear.frame(height: marginY)
                     ForEach(page.lines) { line in
                         VStack(spacing: 0) {
-                            PageCanvas(page: page, palette: palette, line: line.number)
+                            PageCanvas(page: page, palette: palette, line: line.number, washes: washes, onWord: onWord)
                                 .frame(height: pitch)
                                 .accessibilityLabel(line.spoken)
                                 .overlay(alignment: .trailing) {

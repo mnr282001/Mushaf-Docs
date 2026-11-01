@@ -11,6 +11,7 @@ struct ReaderView: View {
     @AppStorage(NotebookSession.visible) private var visibleNotebookIDs = ""
     @AppStorage(NotebookSession.archived) private var archivedNotebookIDs = ""
     @Query(filter: #Predicate<Annotation> { $0.kind == "interlinear" }) private var writings: [Annotation]
+    @Query(filter: #Predicate<Annotation> { $0.kind == "highlight" }) private var highlights: [Annotation]
     @State private var store = MushafStore()
     @State private var notebook: Notebook?
     @State private var page = ReaderView.initialPage
@@ -121,10 +122,12 @@ struct ReaderView: View {
                     notes: writings.filter { $0.page == item.number && $0.notebook?.id == notebook.id },
                     others: readLayers(on: item.number),
                     onSwitch: { activate($0) },
+                    washes: wordWashes(on: item.number),
+                    onWord: { toggleHighlight($0, on: item) },
                     typeLine: Self.typeAtLaunch ? 4 : nil
                 )
             } else {
-                MushafPageView(page: item, marks: marginMarks(on: item.number))
+                MushafPageView(page: item, marks: marginMarks(on: item.number), washes: wordWashes(on: item.number), onWord: { toggleHighlight($0, on: item) })
             }
         }
         .frame(width: width, height: height)
@@ -137,6 +140,36 @@ struct ReaderView: View {
             guard let book = notes.first?.notebook else { return nil }
             return ReadLayer(notebook: book, notes: notes)
         }
+    }
+
+    private func wordWashes(on page: Int) -> [WordWash] {
+        let visible = Set(NotebookSession.ids(visibleNotebookIDs))
+        return highlights.compactMap { note in
+            guard note.page == page, let wordID = note.wordStart, let book = note.notebook, visible.contains(book.id) else { return nil }
+            let hue = NotebookSession.hue(hex: book.colorHex).resolved(night: palette.isNight)
+            return WordWash(wordID: wordID, color: hue.wash.uiColor.withAlphaComponent(hue.washOpacity))
+        }
+    }
+
+    private func toggleHighlight(_ wordID: Int, on page: MushafPage) {
+        prepareNotes()
+        guard let notebook else { return }
+        if let existing = highlights.first(where: { $0.page == page.number && $0.wordStart == wordID && $0.notebook?.id == notebook.id }) {
+            context.delete(existing)
+            return
+        }
+        guard let line = page.lines.first(where: { $0.words.contains { $0.id == wordID } }),
+              let word = line.words.first(where: { $0.id == wordID }) else { return }
+        let note = Annotation()
+        note.notebook = notebook
+        note.kind = "highlight"
+        note.page = page.number
+        note.line = line.number
+        note.ayahStart = "\(word.surah):\(word.ayah)"
+        note.ayahEnd = "\(word.surah):\(word.ayah)"
+        note.wordStart = wordID
+        note.wordEnd = wordID
+        context.insert(note)
     }
 
     private func marginMarks(on page: Int) -> [PageMark] {
@@ -168,6 +201,7 @@ struct ReaderView: View {
         }
         guard let notebook else { return }
         if ProcessInfo.processInfo.arguments.contains("-notebooks") { seedClassNotebook() }
+        if ProcessInfo.processInfo.arguments.contains("-highlight") { seedHighlight() }
         let existing = writings.first { $0.page == 1 && $0.line == 4 && $0.notebook?.id == notebook.id }
         if ProcessInfo.processInfo.arguments.contains("-sample-note"), existing == nil {
             let note = Annotation()
@@ -395,6 +429,24 @@ struct ReaderView: View {
         var visible = NotebookSession.ids(visibleNotebookIDs).filter { $0 != book.id }
         visible.insert(book.id, at: 0)
         visibleNotebookIDs = NotebookSession.raw(Array(visible.prefix(3)))
+    }
+
+    private func seedHighlight() {
+        guard let notebook, let page = store.page(1),
+              let line = page.lines.first(where: { $0.kind == "ayah" }) else { return }
+        for word in line.words where word.kind != "end" {
+            guard !highlights.contains(where: { $0.wordStart == word.id && $0.notebook?.id == notebook.id }) else { continue }
+            let note = Annotation()
+            note.notebook = notebook
+            note.kind = "highlight"
+            note.page = 1
+            note.line = line.number
+            note.ayahStart = "\(word.surah):\(word.ayah)"
+            note.ayahEnd = "\(word.surah):\(word.ayah)"
+            note.wordStart = word.id
+            note.wordEnd = word.id
+            context.insert(note)
+        }
     }
 
     private func seedClassNotebook() {

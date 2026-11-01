@@ -8,15 +8,23 @@ struct PageMark: Identifiable {
     var label: String
 }
 
+struct WordWash: Identifiable {
+    var wordID: Int
+    var color: UIColor
+    var id: Int { wordID }
+}
+
 struct MushafPageView: View {
     var page: MushafPage
     var markedLines: Set<Int> = []
     var mark: Color = Color(hex: 0x2E7D6B)
     var marks: [PageMark] = []
+    var washes: [WordWash] = []
+    var onWord: (Int) -> Void = { _ in }
     @Environment(\.palette) private var palette
 
     var body: some View {
-        PageCanvas(page: page, palette: palette)
+        PageCanvas(page: page, palette: palette, washes: washes, onWord: onWord)
             .background(palette.paper)
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
             .overlay { markDots }
@@ -52,6 +60,10 @@ struct PageCanvas: UIViewRepresentable {
     var page: MushafPage
     var palette: Palette
     var line: Int? = nil
+    var washes: [WordWash] = []
+    var onWord: (Int) -> Void = { _ in }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> PageDrawView {
         let view = PageDrawView()
@@ -59,6 +71,13 @@ struct PageCanvas: UIViewRepresentable {
         view.backgroundColor = .clear
         view.contentMode = .redraw
         view.isAccessibilityElement = false
+        let press = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.press(_:)))
+        press.minimumPressDuration = 0.45
+        press.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue),
+        ]
+        view.addGestureRecognizer(press)
         return view
     }
 
@@ -66,8 +85,23 @@ struct PageCanvas: UIViewRepresentable {
         view.page = page
         view.palette = palette
         view.line = line
+        view.washes = washes
+        context.coordinator.onWord = onWord
+        context.coordinator.frames = { view.wordFrames }
         view.hold(page.number)
         view.setNeedsDisplay()
+    }
+
+    final class Coordinator: NSObject {
+        var onWord: (Int) -> Void = { _ in }
+        var frames: () -> [WordFrame] = { [] }
+
+        @objc func press(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began, let view = gesture.view else { return }
+            let point = gesture.location(in: view)
+            guard let hit = frames().first(where: { $0.rect.contains(point) }) else { return }
+            onWord(hit.wordID)
+        }
     }
 }
 
@@ -78,6 +112,7 @@ final class PageDrawView: UIView {
     private let qpc = QPCRenderer()
     private let uthmani = UthmaniRenderer()
     private var held: Int?
+    var washes: [WordWash] = []
     private(set) var wordFrames: [WordFrame] = []
 
     func hold(_ page: Int?) {
@@ -131,7 +166,9 @@ final class PageDrawView: UIView {
                 let extra = renderer.expandsToWidth && !line.centered ? max(0, textWidth - natural) / gaps : 0
                 let used = natural + extra * CGFloat(max(line.words.count - 1, 0))
                 let right = line.centered ? marginX + (textWidth + used) / 2 : marginX + textWidth
-                let placed = renderer.draw(line, fontSize: fontSize, right: right, baseline: baseline, extraGap: extra, palette: palette, in: ctx)
+                let placed = renderer.placement(line, fontSize: fontSize, right: right, extraGap: extra)
+                wash(placed, top: top, pitch: pitch, in: ctx)
+                _ = renderer.draw(line, fontSize: fontSize, right: right, baseline: baseline, extraGap: extra, palette: palette, in: ctx)
                 frames.append(contentsOf: placed.map { WordFrame(wordID: $0.wordID, rect: CGRect(x: $0.x, y: top, width: $0.width, height: pitch)) })
             default:
                 break
@@ -144,6 +181,23 @@ final class PageDrawView: UIView {
         ctx.restoreGState()
         wordFrames = frames
         accessibilityElements = elements
+    }
+
+    private func wash(_ placed: [PlacedWord], top: CGFloat, pitch: CGFloat, in ctx: CGContext) {
+        let glyphTop = top + pitch * 0.18
+        let glyphHeight = pitch * 0.55
+        let y = bounds.height - (glyphTop + glyphHeight)
+        for word in placed {
+            let colors = washes.filter { $0.wordID == word.wordID }
+            guard !colors.isEmpty else { continue }
+            let rect = CGRect(x: word.x - 1, y: y, width: max(word.width + 2, 4), height: glyphHeight)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: 3)
+            for wash in colors {
+                ctx.setFillColor(wash.color.cgColor)
+                ctx.addPath(path.cgPath)
+                ctx.fillPath()
+            }
+        }
     }
 
     private func fittedSize(_ page: MushafPage, renderer: MushafRendering, textWidth: CGFloat) -> CGFloat {

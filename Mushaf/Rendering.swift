@@ -11,6 +11,7 @@ struct PlacedWord: Hashable {
 protocol MushafRendering: AnyObject {
     var expandsToWidth: Bool { get }
     func measure(_ line: MushafLine, fontSize: CGFloat) -> CGFloat
+    func placement(_ line: MushafLine, fontSize: CGFloat, right: CGFloat, extraGap: CGFloat) -> [PlacedWord]
     func draw(_ line: MushafLine, fontSize: CGFloat, right: CGFloat, baseline: CGFloat, extraGap: CGFloat, palette: Palette, in ctx: CGContext) -> [PlacedWord]
 }
 
@@ -88,16 +89,24 @@ enum GlyphRun {
         CTLineDraw(line, ctx)
     }
 
-    static func place(_ line: MushafLine, strings: [String], font: CTFont, right: CGFloat, baseline: CGFloat, extraGap: CGFloat, palette: Palette, in ctx: CGContext) -> [PlacedWord] {
+    static func layout(_ words: [MushafWord], strings: [String], font: CTFont, right: CGFloat, extraGap: CGFloat) -> [PlacedWord] {
         var cursor = right
         var placed: [PlacedWord] = []
-        for (index, word) in line.words.enumerated() {
+        for (index, word) in words.enumerated() {
             let width = width(strings[index], font)
             cursor -= width
-            let color = (word.kind == "end" ? palette.ayahMarker : palette.quranInk).uiColor.cgColor
-            draw(strings[index].filter { $0 != " " }, font: font, color: color, at: CGPoint(x: cursor, y: baseline), in: ctx)
             placed.append(PlacedWord(wordID: word.id, x: cursor, width: width))
-            if index < line.words.count - 1 { cursor -= extraGap }
+            if index < words.count - 1 { cursor -= extraGap }
+        }
+        return placed
+    }
+
+    static func place(_ line: MushafLine, strings: [String], font: CTFont, right: CGFloat, baseline: CGFloat, extraGap: CGFloat, palette: Palette, in ctx: CGContext) -> [PlacedWord] {
+        let placed = layout(line.words, strings: strings, font: font, right: right, extraGap: extraGap)
+        for (index, word) in placed.enumerated() {
+            let source = line.words[index]
+            let color = (source.kind == "end" ? palette.ayahMarker : palette.quranInk).uiColor.cgColor
+            draw(strings[index].filter { $0 != " " }, font: font, color: color, at: CGPoint(x: word.x, y: baseline), in: ctx)
         }
         return placed
     }
@@ -110,6 +119,11 @@ final class QPCRenderer: MushafRendering {
     func measure(_ line: MushafLine, fontSize: CGFloat) -> CGFloat {
         guard let font = FontBook.shared.font(FontBook.shared.pageFont(line.page), size: fontSize) else { return 0 }
         return line.words.reduce(0) { $0 + GlyphRun.width($1.code, font) }
+    }
+
+    func placement(_ line: MushafLine, fontSize: CGFloat, right: CGFloat, extraGap: CGFloat) -> [PlacedWord] {
+        guard let font = FontBook.shared.font(FontBook.shared.pageFont(line.page), size: fontSize) else { return [] }
+        return GlyphRun.layout(line.words, strings: line.words.map(\.code), font: font, right: right, extraGap: extraGap)
     }
 
     func draw(_ line: MushafLine, fontSize: CGFloat, right: CGFloat, baseline: CGFloat, extraGap: CGFloat, palette: Palette, in ctx: CGContext) -> [PlacedWord] {
@@ -125,6 +139,11 @@ final class UthmaniRenderer: MushafRendering {
     func measure(_ line: MushafLine, fontSize: CGFloat) -> CGFloat {
         guard let font = FontBook.shared.font(FontBook.shared.uthmanic, size: fontSize) else { return 0 }
         return line.words.reduce(0) { $0 + GlyphRun.width($1.text, font) }
+    }
+
+    func placement(_ line: MushafLine, fontSize: CGFloat, right: CGFloat, extraGap: CGFloat) -> [PlacedWord] {
+        guard let font = FontBook.shared.font(FontBook.shared.uthmanic, size: fontSize) else { return [] }
+        return GlyphRun.layout(line.words, strings: line.words.map(\.text), font: font, right: right, extraGap: extraGap)
     }
 
     func draw(_ line: MushafLine, fontSize: CGFloat, right: CGFloat, baseline: CGFloat, extraGap: CGFloat, palette: Palette, in ctx: CGContext) -> [PlacedWord] {
